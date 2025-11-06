@@ -1,3 +1,51 @@
+### --- START: Recommended Additions for HEC DS/Finance Project --- ###
+
+# --- 1. Large Data Files ---
+# NEVER track your raw data. Git is not for data storage.
+data/
+datasets/
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.sqlite
+# (The template below has db.sqlite3, but these are good general rules)
+
+# --- 2. Trained Models & Outputs ---
+# Trained models can be very large and are "built" files, not source code.
+models/
+*.pkl
+*.joblib
+*.h5
+*.hdf5
+
+# Ignore generated outputs like plots, figures, or reports
+outputs/
+reports/
+figures/
+
+# --- 3. IDE & OS-Specific ---
+# These are files specific to your personal computer setup.
+# The template below has commented-out sections for these,
+# but it's safer to add them explicitly here.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- 4. Sensitive Information (CRITICAL) ---
+# The template below ALREADY has .env, which is perfect.
+# This is just a reminder: NEVER commit API keys or passwords.
+# *.env
+
+### --- END: Recommended Additions --- ###
+
+
+#
+# --- Original GitHub Python Template Below ---
+# (No changes needed here, it's very thorough)
+#
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -182,9 +230,9 @@ cython_debug/
 .abstra/
 
 # Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore  
 #  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#  and can be added to the global gitignore or merged into this file. However, if you prefer,  
 #  you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 
