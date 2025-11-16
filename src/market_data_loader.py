@@ -1,5 +1,6 @@
 import yfinance as yf
 import pandas as pd
+import sys  # <--- CORRECTION 1
 
 # --- CONFIGURATION ---
 # This map is based on YOUR logic.
@@ -170,13 +171,12 @@ def fetch_market_data(report_data, base_currency='CHF'):
 if __name__ == "__main__":
     
     try:
-        # This test assumes the file is in 'src' and you run it from the root folder
+        # This module *only* needs data_loader to run its test
         from src import data_loader as dl
-        from src import portfolio_processor as pp
     except ImportError:
-        print("Could not import modules. Make sure this file is in the 'src' folder.")
+        print("Could not import data_loader. Make sure this file is in the 'src' folder.")
         print("And that you are running this test from the parent directory (your project root).")
-        exit()
+        sys.exit(1) # <--- CORRECTION 2
 
     # Define paths (relative to the project root, not 'src')
     filepath = r'data/U13271915_20250101_20251029.csv'
@@ -186,23 +186,20 @@ if __name__ == "__main__":
     original_report = dl.load_ibkr_report(filepath)
     
     if original_report:
-        print(f"\n--- Step 2: Adjusting for Splits ---")
-        adjusted_report = pp.adjust_for_splits(original_report)
+        print(f"\n--- Step 2: Fetching Market Data (Automapped) ---")
         
-        if adjusted_report:
-            print(f"\n--- Step 3: Fetching Market Data (Automapped) ---")
+        # Pass the *original_report*, which has the 'initial_state'
+        # and 'financial_info' keys that fetch_market_data needs.
+        market_data = fetch_market_data(
+            original_report, 
+            base_currency='CHF'
+        )
+        
+        if market_data:
+            print("\n" + "="*80)
+            print("--- Asset Prices (Head) ---")
+            print(market_data['prices'].head())
             
-            # Pass the *original* report, which has the financial_info
-            market_data = fetch_market_data(
-                original_report, 
-                base_currency='CHF'
-            )
-            
-            if market_data:
-                print("\n" + "="*80)
-                print("--- Asset Prices (Head) ---")
-                print(market_data['prices'].head())
-                
-                print("\n" + "="*80)
-                print("--- FX Rates (Head) ---")
-                print(market_data['fx_rates'].head())
+            print("\n" + "="*80)
+            print("--- FX Rates (Head) ---")
+            print(market_data['fx_rates'].head())
