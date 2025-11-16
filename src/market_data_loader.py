@@ -1,205 +1,267 @@
-import yfinance as yf
 import pandas as pd
-import sys  # <--- CORRECTION 1
+import yfinance as yf
+from datetime import timedelta
 
-# --- CONFIGURATION ---
-# This map is based on YOUR logic.
-# It converts IBKR exchange codes to yfinance ticker suffixes.
-EXCHANGE_SUFFIX_MAP = {
+# --- DEFAULT CONFIGURATION ---
+
+# This map is used as the default for the fetch_market_data function.
+# It covers common exchanges reported by IBKR and maps them to yfinance suffixes.
+DEFAULT_EXCHANGE_SUFFIX_MAP = {
     # USA (No Suffix)
     'NASDAQ': '',
     'NYSE': '',
     'ARCA': '',
     
-    # Switzerland (.SW)
+    # Switzerland
     'EBS': '.SW',
     
-    # Germany (.F for Frankfurt)
-    'IBIS': '.F', # Using your rule: IBIS -> .F
+    # Germany
+    'IBIS': '.F',
     
-    # France (.PA for Paris)
+    # France
     'SBF': '.PA',
     
-    # UK (.L for London)
+    # UK
     'LSE': '.L',
 
-    # Italy (.MI for Milan)
+    # Italy
     'BVME': '.MI',
     
-    # Spain (.MC for Madrid)
+    # Spain
     'BM': '.MC',
 }
-# ---------------------
 
+# --- PRIVATE HELPER ---
 
-def _build_ticker_map(initial_state, financial_info):
+def _build_ticker_map(all_stock_symbols, df_financial_info, exchange_suffix_map):
     """
-    Automatically builds the IBKR-to-yfinance ticker map
-    using the 'Financial Instrument Information' section.
-    """
-    asset_tickers_map = {} # e.g., {'ANFO': 'ANFO.SW'}
+    Private helper to build a map from IBKR symbol to the correct yfinance ticker.
     
-    if financial_info is None or financial_info.empty:
-        print("Error: 'Financial Instrument Information' was not found. Cannot map tickers.")
-        return asset_tickers_map
-
-    # Set 'Symbol' as the index for fast lookups
-    try:
-        info = financial_info.set_index('Symbol')
-    except KeyError:
-        print("Error: 'Financial Instrument Information' is missing 'Symbol' column.")
-        return asset_tickers_map
-
-    # Get all unique stock symbols from the initial state
-    stock_symbols = initial_state[
-        initial_state['asset_category'] == 'Stock'
-    ]['symbol'].unique()
-    
-    for symbol in stock_symbols:
-        try:
-            # Look up the symbol (e.g., 'ANFO') in the info table
-            # Handle cases where a symbol might be listed multiple times (e.g., VNA/VNA.DRTS)
-            row = info.loc[symbol]
-            exchange = row['Listing Exch'].iloc[0] if isinstance(row, pd.DataFrame) else row['Listing Exch']
-            
-            # Look up the exchange (e.g., 'EBS') in our suffix map
-            if exchange in EXCHANGE_SUFFIX_MAP:
-                suffix = EXCHANGE_SUFFIX_MAP[exchange]
-                # Create the yfinance ticker (e.g., 'ANFO' + '.SW')
-                asset_tickers_map[symbol] = f"{symbol}{suffix}"
-            else:
-                print(f"Warning: No suffix mapping for exchange '{exchange}' (Symbol: {symbol}). Will try simple ticker.")
-                asset_tickers_map[symbol] = symbol # Default to no suffix
-
-        except KeyError:
-            print(f"Warning: Symbol '{symbol}' not found in 'Financial Instrument Information'. Skipping.")
-            
-    return asset_tickers_map
-
-
-def fetch_market_data(report_data, base_currency='CHF'):
-    """
-    Fetches all required price and FX data from yfinance.
-    
-    Args:
-        report_data (dict): The complete dictionary from load_ibkr_report(),
-                            containing 'initial_state', 'events', and 'financial_info'.
-        base_currency (str): Your home currency (e.g., 'CHF').
-        
     Returns:
-        dict: A dictionary containing 'prices' (DataFrame) and 'fx_rates' (DataFrame),
-              or None on failure.
+        tuple: (ticker_map, ticker_info_map)
+            - ticker_map: {'IBKR_SYMBOL': 'YFINANCE_TICKER'}
+            - ticker_info_map: {'IBKR_SYMBOL': {details...}} (for debugging)
+    """
+    ticker_map = {}
+    ticker_info_map = {}
+    
+    if df_financial_info is None:
+        print("Warning: 'Financial Instrument Information' section is missing.")
+        print("All tickers will be fetched using their base symbol (e.g., 'VNA', 'IBKR').")
+        print("This may fail for non-US stocks.")
+        # Use symbols directly as a fallback
+        for symbol in all_stock_symbols:
+            ticker_map[symbol] = symbol
+            ticker_info_map[symbol] = {
+                'exchange': 'Unknown',
+                'suffix': '',
+                'yfinance_ticker': symbol,
+                'status': 'No financial info, using symbol as-is.'
+            }
+        return ticker_map, ticker_info_map
+
+    # Build symbol -> exchange map from the financial info DataFrame
+    df_fin_info_unique = df_financial_info[['Symbol', 'Exchange']].drop_duplicates()
+    symbol_exchange_map = df_fin_info_unique.set_index('Symbol')['Exchange'].to_dict()
+
+    for symbol in all_stock_symbols:
+        exchange = symbol_exchange_map.get(symbol)
+        suffix = ''
+        status = 'OK'
+
+        if not exchange:
+            status = f"No exchange info found for {symbol}. Using symbol as-is."
+            suffix = '' # Default to no suffix
+        else:
+            suffix = exchange_suffix_map.get(exchange)
+            if suffix is None:
+                status = f"No suffix mapping found for exchange '{exchange}' (symbol: {symbol}). Using symbol as-is."
+                suffix = '' # Default to no suffix
+        
+        yfinance_ticker = f"{symbol}{suffix}"
+        ticker_map[symbol] = yfinance_ticker
+        ticker_info_map[symbol] = {
+            'exchange': exchange,
+            'suffix': suffix,
+            'yfinance_ticker': yfinance_ticker,
+            'status': status
+        }
+    
+    return ticker_map, ticker_info_map
+
+# --- PUBLIC FUNCTION ---
+
+def fetch_market_data(report_data, exchange_suffix_map=DEFAULT_EXCHANGE_SUFFIX_MAP):
+    """
+    Fetches historical market data from yfinance for all stocks in the report.
+
+    It uses the 'financial_info' DataFrame to map IBKR symbols to
+    yfinance tickers (e.g., VNA on EBS -> VNA.SW).
+
+    Args:
+        report_data (dict): The dictionary from data_loader.load_ibkr_report().
+        exchange_suffix_map (dict, optional): 
+            A map of {exchange_name: yfinance_suffix}.
+            If not provided, defaults to DEFAULT_EXCHANGE_SUFFIX_MAP.
+
+    Returns:
+        dict: A bundle containing market data and debug info.
+              {
+                  'data': {
+                      'IBKR_SYMBOL_1': pd.DataFrame,
+                      'IBKR_SYMBOL_2': pd.DataFrame
+                  },
+                  'ticker_info': {
+                      'IBKR_SYMBOL_1': {'exchange': 'EBS', 'suffix': '.SW', ...}
+                  }
+              }
     """
     
-    # Unpack the data
-    initial_state = report_data['initial_state']
-    events = report_data['events']
-    financial_info = report_data['financial_info']
-    
-    # --- 1. Get Full Date Range ---
-    start_date = events['timestamp'].min().date()
-    end_date = events['timestamp'].max().date() + pd.Timedelta(days=2) # 2-day buffer
-    
-    # --- 2. Build Asset Ticker Map Automatically ---
-    asset_tickers_map = _build_ticker_map(initial_state, financial_info)
-    
-    if not asset_tickers_map:
-        print("Error: Could not build any asset tickers. Aborting market data fetch.")
-        return None
-        
-    yf_stock_tickers = list(asset_tickers_map.values())
-    
-    # --- 3. Get FX Tickers to Fetch ---
-    all_currencies = initial_state['currency'].unique()
-    foreign_currencies = [c for c in all_currencies if c != base_currency and pd.notna(c)]
-    
-    # Format for yfinance, e.g., "USDCHF=X", "EURCHF=X"
-    fx_tickers = [f"{c}{base_currency}=X" for c in foreign_currencies]
-    
-    print(f"Fetching {len(yf_stock_tickers)} asset prices and {len(fx_tickers)} FX rates...")
-    
-    try:
-        # --- 4. Fetch Asset Prices (Adjusted Close) ---
-        # This is what you wanted: split-adjusted prices in their original currency
-        price_data = yf.download(yf_stock_tickers, start=start_date, end=end_date)
-        if price_data.empty:
-            raise ValueError(f"yfinance returned no price data for tickers: {yf_stock_tickers}")
-            
-        # Select 'Adj Close' and handle single/multi-ticker results
-        if len(yf_stock_tickers) == 1:
-            df_prices = price_data[['Adj Close']].rename(columns={'Adj Close': yf_stock_tickers[0]})
-        else:
-            df_prices = price_data['Adj Close']
-            
-        # Rename columns back to our internal symbols (e.g., 'ANFO.SW' -> 'ANFO')
-        reverse_map = {v: k for k, v in asset_tickers_map.items()}
-        df_prices = df_prices.rename(columns=reverse_map)
-        
-        # --- 5. Fetch FX Rates (Close) ---
-        df_fx_rates = pd.DataFrame() # Create empty DF
-        if fx_tickers: # Only fetch if there are foreign currencies
-            fx_data = yf.download(fx_tickers, start=start_date, end=end_date)
-            if fx_data.empty:
-                print(f"Warning: yfinance returned no FX data for tickers: {fx_tickers}. Will proceed without FX.")
-            else:
-                # Select 'Close' and handle single/multi-ticker results
-                if len(fx_tickers) == 1:
-                    df_fx_rates = fx_data[['Close']].rename(columns={'Close': fx_tickers[0]})
-                else:
-                    df_fx_rates = fx_data['Close']
-        
-        # --- 6. Clean and Fill Missing Data (Holidays) ---
-        # Forward-fill (ffill) carries the last known price over holidays/weekends
-        df_prices = df_prices.ffill().bfill() # bfill for any initial NaNs
-        df_fx_rates = df_fx_rates.ffill().bfill()
-        
-        # Add the base currency (CHF) to FX rates with a rate of 1.0
-        df_fx_rates[base_currency] = 1.0
-        
-        print("Market data fetched successfully.")
-        
-        return {
-            'prices': df_prices,
-            'fx_rates': df_fx_rates
-        }
-        
-    except Exception as e:
-        print(f"Error during yfinance download: {e}")
-        return None
+    # --- 1. Extract data and get date range ---
+    df_initial_state = report_data['initial_state']
+    df_events = report_data['events']
+    df_financial_info = report_data.get('financial_info') # Use .get() for safety
 
-# --- Example of how to use this module ---
+    if df_events.empty:
+        print("Error: Event log is empty. Cannot determine date range.")
+        return {'data': {}, 'ticker_info': {}}
+
+    start_date = df_events['timestamp'].min().date()
+    end_date = df_events['timestamp'].max().date()
+    
+    # Add a small buffer to ensure we get data for the start/end dates
+    start_str = (start_date - timedelta(days=1)).strftime('%Y-%m-%d')
+    end_str = (end_date + timedelta(days=1)).strftime('%Y-%m-%d')
+
+    # --- 2. Identify all unique stock symbols ---
+    # Get symbols from both initial state and events to be comprehensive
+    stock_symbols_initial = set(df_initial_state[
+        df_initial_state['asset_category'] == 'Stock'
+    ]['symbol'].unique())
+    
+    # Find all symbols ever involved in a stock-related transaction
+    stock_symbols_events = set(df_events[
+        (df_events['symbol'].notna()) & 
+        (df_events['event_type'].str.contains('TRADE|GIFT_VEST|CORP_ACTION|SPLIT'))
+    ]['symbol'].unique())
+    
+    all_stock_symbols = stock_symbols_initial | stock_symbols_events
+    
+    if not all_stock_symbols:
+        print("No stock symbols found in the report.")
+        return {'data': {}, 'ticker_info': {}}
+
+    # --- 3. Build the ticker map ---
+    ticker_map, ticker_info_map = _build_ticker_map(
+        all_stock_symbols, 
+        df_financial_info, 
+        exchange_suffix_map # Use the provided (or default) map
+    )
+
+    # --- 4. Fetch data from yfinance ---
+    unique_yfinance_tickers = sorted(list(set(ticker_map.values())))
+    
+    if not unique_yfinance_tickers:
+        print("No yfinance tickers to fetch.")
+        return {'data': {}, 'ticker_info': ticker_info_map}
+
+    print(f"Fetching {len(unique_yfinance_tickers)} tickers from {start_str} to {end_str}...")
+    print(f"Tickers: {', '.join(unique_yfinance_tickers)}")
+    
+    # auto_adjust=True applies splits/dividends to the 'Close' price.
+    # This is what we want, as portfolio_processor.py adjusts the *quantities*
+    # to be compatible with *adjusted prices*.
+    yf_data = yf.download(
+        unique_yfinance_tickers, 
+        start=start_str, 
+        end=end_str, 
+        auto_adjust=True, # Use adjusted close prices
+        group_by='ticker',
+        progress=False # Cleaner log for a module
+    )
+    
+    # --- 5. Process yfinance results ---
+    
+    # Handle case for single ticker download (returns DataFrame, not dict-like)
+    if len(unique_yfinance_tickers) == 1:
+        ticker = unique_yfinance_tickers[0]
+        if yf_data.empty:
+            yf_data_map = {ticker: pd.DataFrame()} # Empty
+        else:
+            yf_data_map = {ticker: yf_data}
+    else:
+        # For multiple tickers, yf.download with group_by='ticker'
+        # returns a dict-like object (pandas Panel)
+        yf_data_map = {ticker: yf_data[ticker] for ticker in unique_yfinance_tickers}
+
+    # --- 6. Map data back to original IBKR symbols ---
+    market_data_by_symbol = {}
+    for original_symbol, yfinance_ticker in ticker_map.items():
+        data = yf_data_map.get(yfinance_ticker)
+        
+        if data is None or data.empty:
+            print(f"Warning: No data returned for {original_symbol} (ticker: {yfinance_ticker})")
+            ticker_info_map[original_symbol]['status'] = 'Error: yfinance returned no data.'
+            # Provide an empty, but structured, DataFrame
+            market_data_by_symbol[original_symbol] = pd.DataFrame(
+                columns=['Open', 'High', 'Low', 'Close', 'Volume']
+            ).rename_axis('Date')
+        else:
+            # Keep only the standard OHLCV columns
+            data = data[['Open', 'High', 'Low', 'Close', 'Volume']]
+            market_data_by_symbol[original_symbol] = data
+    
+    print("Market data fetch complete.")
+    
+    return {
+        'data': market_data_by_symbol,
+        'ticker_info': ticker_info_map
+    }
+
+# --- This main block is for testing ---
 if __name__ == "__main__":
+    # It assumes:
+    # 1. You are running this file from the project's root directory (the folder *above* 'src').
+    # 2. 'data_loader.py' is in 'src/' (e.g., 'src/data_loader.py').
+    # 3. Your report CSV is in 'data/' (e.g., 'data/U13271915_20250101_20251029.csv').
     
     try:
-        # This module *only* needs data_loader to run its test
+        # Try to import the data_loader from the 'src' folder
         from src import data_loader as dl
     except ImportError:
-        print("Could not import data_loader. Make sure this file is in the 'src' folder.")
-        print("And that you are running this test from the parent directory (your project root).")
-        sys.exit(1) # <--- CORRECTION 2
-
-    # Define paths (relative to the project root, not 'src')
-    filepath = r'data/U13271915_20250101_20251029.csv'
+        print("Error: Could not import 'src.data_loader'.")
+        print("Please make sure you are running this script from the root project directory (the folder *above* 'src').")
+        dl = None # Set to None to prevent running
     
-    print(f"--- Step 1: Loading Report ---")
-    # We now get 'financial_info' for free
-    original_report = dl.load_ibkr_report(filepath)
-    
-    if original_report:
-        print(f"\n--- Step 2: Fetching Market Data (Automapped) ---")
+    if dl:
+        # --- 1. Define your report path ---
+        file_path = r'data/U13271915_20250101_20251029.csv'
         
-        # Pass the *original_report*, which has the 'initial_state'
-        # and 'financial_info' keys that fetch_market_data needs.
-        market_data = fetch_market_data(
-            original_report, 
-            base_currency='CHF'
-        )
+        # --- 2. Load Report ---
+        print(f"Loading report data from: {file_path}")
+        report_data = dl.load_ibkr_report(file_path)
         
-        if market_data:
-            print("\n" + "="*80)
-            print("--- Asset Prices (Head) ---")
-            print(market_data['prices'].head())
+        if report_data:
+            print("Report loaded. Fetching market data using the default suffix map...")
+            
+            # --- 3. Fetch Data ---
+            # No need to pass the map, it will use the default.
+            market_data_bundle = fetch_market_data(report_data)
             
             print("\n" + "="*80)
-            print("--- FX Rates (Head) ---")
-            print(market_data['fx_rates'].head())
+            print("--- Ticker Info Map (Debugging) ---")
+            # Use json for pretty-printing the debug map
+            import json
+            print(json.dumps(market_data_bundle['ticker_info'], indent=2))
+            print("="*80)
+
+            print("\n--- Fetched Data Summary ---")
+            for symbol, df in market_data_bundle['data'].items():
+                if not df.empty:
+                    print(f"  Symbol: {symbol} (Ticker: {market_data_bundle['ticker_info'][symbol]['yfinance_ticker']})")
+                    print(f"  Date Range: {df.index.min().date()} to {df.index.max().date()}")
+                    print(f"  Rows: {len(df)}")
+                    print(f"  First 2 rows:\n{df.head(2)}\n")
+                else:
+                    print(f"  Symbol: {symbol} (Ticker: {market_data_bundle['ticker_info'][symbol]['yfinance_ticker']})")
+                    print(f"  Status: No data found.\n")
