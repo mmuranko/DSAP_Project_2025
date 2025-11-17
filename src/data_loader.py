@@ -1,5 +1,6 @@
 import pandas as pd
 import re
+from datetime import datetime
 
 # --- HELPER UTILITY ---
 
@@ -13,175 +14,229 @@ def get_section(df_raw, section_name):
             (df_raw[0] == section_name) & (df_raw[1] == 'Header')
         ].index[0]
         
-        column_names = df_raw.iloc[header_row_index]
-        
-        # Find all 'Data' rows for that section
+        # Get column names directly without stripping whitespace
+        column_names = df_raw.iloc[header_row_index].values
+
         data_rows = df_raw[
             (df_raw[0] == section_name) & (df_raw[1] == 'Data')
         ]
         
-        # Create the new DataFrame
         df_section = pd.DataFrame(data_rows.values, columns=column_names)
-        
-        # Clean up: Drop all-NaN columns and reset index
         df_section = df_section.dropna(axis=1, how='all').reset_index(drop=True)
-        
-        # Drop the first two columns (which are just 'Section', 'Data')
         return df_section.iloc[:, 2:]
         
     except IndexError:
-        # This is not an error, just a section that doesn't exist
         return None
     except Exception as e:
         print(f"Error parsing section '{section_name}': {e}")
         return None
 
-# --- PARSER FUNCTIONS (PUBLIC) ---
+def clean_ibkr_symbol(symbol):
+    """
+    Cleans symbol according to specific rules:
+    1. If symbol contains '.', return None (exclude entirely).
+    2. If symbol ends with a lowercase letter, remove it.
+    3. Otherwise return symbol as is.
+    """
+    if pd.isna(symbol) or symbol == '':
+        return None
+        
+    s = str(symbol)
+    
+    # Rule 1: Exclude derivatives/rights with dots
+    if '.' in s:
+        return None
+        
+    # Rule 2: Strip trailing lowercase (e.g., 'VOW3d' -> 'VOW3')
+    if s and s[-1].islower():
+        return s[:-1]
+        
+    return s
+
+# --- PARSER FUNCTIONS ---
 
 def parse_initial_state(df_mtm, symbol_currency_map, master_symbol_set):
     """
     Parses the Mark-to-Market to build the initial state DataFrame.
-    Uses the pre-built symbol_currency_map to assign currencies.
-    Uses master_symbol_set to filter out irrelevant "ghost" assets.
+    Uses vectorized operations and ensures symbols match the master set format.
     """
     if df_mtm is None:
-        print("Warning: 'Mark-to-Market Performance Summary' section not found. Cannot determine initial state.")
+        print("Warning: 'Mark-to-Market Performance Summary' section not found.")
         return pd.DataFrame(columns=['symbol', 'asset_category', 'currency', 'quantity', 'value_native'])
 
-    all_assets = []
+    # -----------------------
+    # 1. Process Stocks
+    # -----------------------
+    df_stocks = df_mtm[df_mtm['Asset Category'] == 'Stocks'].copy()
     
-    # Process Stocks
-    df_mtm_stocks = df_mtm[df_mtm['Asset Category'] == 'Stocks'].copy()
-    df_mtm_stocks['Prior Quantity'] = pd.to_numeric(df_mtm_stocks['Prior Quantity'], errors='coerce').fillna(0)
-    df_mtm_stocks['Prior Price'] = pd.to_numeric(df_mtm_stocks['Prior Price'], errors='coerce').fillna(0)
+    # CRITICAL: Apply the same cleaning logic to MtM symbols so they match the keys in your map
+    df_stocks['symbol'] = df_stocks['Symbol'].apply(clean_ibkr_symbol)
     
-    for _, row in df_mtm_stocks.iterrows():
-        symbol = row['Symbol']
-        
-        # --- THIS IS THE FIX ---
-        # Only add stocks that are in our master list of relevant assets
-        if symbol in master_symbol_set:
-            quantity = row['Prior Quantity']
-            currency = symbol_currency_map.get(symbol, 'Unknown') 
-            
-            all_assets.append({
-                'symbol': symbol,
-                'asset_category': 'Stock',
-                'currency': currency,
-                'quantity': quantity,
-                'value_native': quantity * row['Prior Price']
-            })
+    # Filter: Remove 'None' (dotted symbols) AND keep only those in your master set
+    mask_valid = (df_stocks['symbol'].notna()) & (df_stocks['symbol'].isin(master_symbol_set))
+    df_stocks = df_stocks[mask_valid].copy()
 
-    # Process Forex (Cash)
-    df_mtm_cash = df_mtm[df_mtm['Asset Category'] == 'Forex'].copy()
-    df_mtm_cash['Prior Quantity'] = pd.to_numeric(df_mtm_cash['Prior Quantity'], errors='coerce').fillna(0)
+    # Numeric Conversions
+    df_stocks['quantity'] = pd.to_numeric(df_stocks['Prior Quantity'], errors='coerce').fillna(0)
+    prior_price = pd.to_numeric(df_stocks['Prior Price'], errors='coerce').fillna(0)
+    
+    # Calculate Values & Map Metadata
+    df_stocks['value_native'] = df_stocks['quantity'] * prior_price
+    df_stocks['currency'] = df_stocks['symbol'].map(symbol_currency_map).fillna('Unknown')
+    df_stocks['asset_category'] = 'Stock'
 
-    for _, row in df_mtm_cash.iterrows():
-        currency_symbol = row['Symbol']
-        balance = row['Prior Quantity']
-        
-        all_assets.append({
-            'symbol': currency_symbol,
-            'asset_category': 'Cash',
-            'currency': currency_symbol,
-            'quantity': balance,
-            'value_native': balance
-        })
-        
-    df_state = pd.DataFrame(all_assets)
-    return df_state[['symbol', 'asset_category', 'currency', 'quantity', 'value_native']]
+    # Select final columns for stocks
+    cols = ['symbol', 'asset_category', 'currency', 'quantity', 'value_native']
+    df_stocks_final = df_stocks[cols]
+
+    # -----------------------
+    # 2. Process Forex (Cash)
+    # -----------------------
+    # Note: Cash symbols (e.g., 'USD') are usually not in the stock-only master_symbol_set, 
+    # so we process them separately without filtering against that set.
+    df_cash = df_mtm[df_mtm['Asset Category'] == 'Forex'].copy()
+    
+    df_cash['quantity'] = pd.to_numeric(df_cash['Prior Quantity'], errors='coerce').fillna(0)
+    df_cash['symbol'] = df_cash['Symbol']  # Usually 'EUR', 'USD', etc.
+    df_cash['currency'] = df_cash['Symbol']
+    df_cash['value_native'] = df_cash['quantity'] # Cash value is just the quantity
+    df_cash['asset_category'] = 'Cash'
+    
+    df_cash_final = df_cash[cols]
+
+    # -----------------------
+    # 3. Combine
+    # -----------------------
+    return pd.concat([df_stocks_final, df_cash_final], ignore_index=True)
 
 
 def parse_event_log(df_raw, df_trades):
     """
     Parses all transactional sections into a single master event log.
-    Receives df_trades to avoid loading it twice.
     """
     all_events = []
     
-    # --- 1. Parse Trades (Stocks & Forex) ---
+    # --- Parse Stocks ---
     if df_trades is not None:
         df_trades_orders = df_trades[df_trades['DataDiscriminator'] == 'Order'].copy()
         
-        # Stock Trades
+        # --- Stock Trades ---
         df_stock_trades = df_trades_orders[df_trades_orders['Asset Category'] == 'Stocks'].copy()
         
-        # --- FIX: Removed the lines that added new columns ---
+        # 1. Apply Symbol Cleaning
+        df_stock_trades['Symbol'] = df_stock_trades['Symbol'].apply(clean_ibkr_symbol)
         
+        # 2. Drop rows where Symbol became None (excluded) or Date is missing
+        df_stock_trades = df_stock_trades.dropna(subset=['Symbol', 'Date/Time'])
+        
+        # 3. Pre-convert numerics (Handles commas strings efficiently)
+        df_stock_trades['Quantity'] = pd.to_numeric(
+            df_stock_trades['Quantity'].astype(str).str.replace(',', ''), 
+            errors='coerce'
+        ).fillna(0)
+        
+        df_stock_trades['Proceeds'] = pd.to_numeric(df_stock_trades['Proceeds'], errors='coerce').fillna(0)
+        df_stock_trades['Comm/Fee'] = pd.to_numeric(df_stock_trades['Comm/Fee'], errors='coerce').fillna(0)
+
+        # 4. Build Events
         for _, row in df_stock_trades.iterrows():
-            if pd.isna(row['Date/Time']): continue
-            
-            # --- FIX: Do all conversions and math *inside* the loop ---
-            # --- using the original UPPERCASE column names ---
-            quantity_change = pd.to_numeric(row['Quantity'].replace(',', ''), errors='coerce')
-            proceeds = pd.to_numeric(row['Proceeds'], errors='coerce')
-            comm_fee = pd.to_numeric(row['Comm/Fee'], errors='coerce')
+            timestamp = pd.to_datetime(row['Date/Time'], format='mixed')
+            quantity_change = row['Quantity']
             
             all_events.append({
-                'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
+                'timestamp': timestamp,
                 'event_type': 'TRADE_BUY' if quantity_change > 0 else 'TRADE_SELL',
                 'symbol': row['Symbol'],
                 'quantity_change': quantity_change,
-                'cash_change_native': proceeds + comm_fee,
+                'cash_change_native': row['Proceeds'] + row['Comm/Fee'],
                 'currency': row['Currency']
             })
-            
-        # --- FIX: Forex Trades (This is the critical fix from last time) ---
+
+
+
+        # --- Parse Forex ---
         df_fx_trades = df_trades_orders[df_trades_orders['Asset Category'] == 'Forex'].copy()
         
-        for _, row in df_fx_trades.iterrows():
-            if pd.isna(row['Date/Time']): continue
+        # 1. Vectorized Symbol Parsing
+        # IBKR Forex symbols are "BASE.QUOTE" (e.g. EUR.USD). 
+        # We split them into two columns immediately.
+        symbol_split = df_fx_trades['Symbol'].astype(str).str.split('.', n=1, expand=True)
+        
+        # Safety Check: Ensure the split actually resulted in 2 columns. 
+        # If bad data exists (e.g. "EUR"), strict checking prevents crashing.
+        if symbol_split.shape[1] == 2:
+            df_fx_trades['curr_base'] = symbol_split[0]
+            df_fx_trades['curr_quote'] = symbol_split[1]
             
-            # Get the two currencies from the symbol, e.g., "EUR.CHF"
-            try:
-                curr_from, curr_to = row['Symbol'].split('.')
-            except ValueError:
-                print(f"Warning: Could not parse FX symbol '{row['Symbol']}'. Skipping row.")
-                continue
-
-            # The 'Quantity' is the amount of the "from" currency
-            cash_change_from = pd.to_numeric(row['Quantity'].replace(',', ''), errors='coerce')
+            # Filter out rows where split failed (NaNs) or Date is missing
+            df_fx_trades = df_fx_trades.dropna(subset=['curr_base', 'curr_quote', 'Date/Time'])
             
-            # The 'Proceeds' is the amount of the "to" currency
-            cash_change_to = pd.to_numeric(row['Proceeds'], errors='coerce')
-
-            # Create the "FROM" currency event (e.g., selling EUR)
-            all_events.append({
-                'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
-                'event_type': 'FX_TRADE',
-                'symbol': curr_from, # This is the symbol
-                'quantity_change': 0, # It's a cash event, not a share change
-                'cash_change_native': cash_change_from,
-                'currency': curr_from # The currency of this cash event
-            })
+            # 2. Pre-convert Numerics
+            df_fx_trades['Quantity'] = pd.to_numeric(
+                df_fx_trades['Quantity'].astype(str).str.replace(',', ''), 
+                errors='coerce'
+            ).fillna(0)
             
-            # Create the "TO" currency event (e.g., buying CHF)
-            all_events.append({
-                'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
-                'event_type': 'FX_TRADE',
-                'symbol': curr_to, # This is the symbol
-                'quantity_change': 0,
-                'cash_change_native': cash_change_to,
-                'currency': curr_to # The currency of this cash event
-            })
+            df_fx_trades['Proceeds'] = pd.to_numeric(
+                df_fx_trades['Proceeds'].astype(str).str.replace(',', ''), 
+                errors='coerce'
+            ).fillna(0)
 
-    # --- 2. Parse Dividends, Taxes, Interest ---
-    # (This section is correct, no changes)
+            # 3. Build Events (Loop is now safe and clean)
+            for _, row in df_fx_trades.iterrows():
+                timestamp = pd.to_datetime(row['Date/Time'], format='mixed')
+                
+                # Side A: The Base Currency (Quantity column applies here)
+                all_events.append({
+                    'timestamp': timestamp,
+                    'event_type': 'FX_TRADE',
+                    'symbol': row['curr_base'],
+                    'quantity_change': 0,
+                    'cash_change_native': row['Quantity'], 
+                    'currency': row['curr_base']
+                })
+                
+                # Side B: The Quote Currency (Proceeds column applies here)
+                all_events.append({
+                    'timestamp': timestamp,
+                    'event_type': 'FX_TRADE',
+                    'symbol': row['curr_quote'],
+                    'quantity_change': 0,
+                    'cash_change_native': row['Proceeds'],
+                    'currency': row['curr_quote']
+                })
+
+
+
+    # --- Parse Dividends & Withholding Tax ---
+    # Regex: Capture start word, ignore optional .Suffix, expect opening parenthesis
+    extract_symbol_regex = r'^([A-Za-z0-9]+)(?:\.[A-Za-z0-9]+)?\('
+
     for section_name, event_type in [('Dividends', 'DIVIDEND'), 
-                                     ('Withholding Tax', 'TAX'),
-                                     ('Interest', 'INTEREST')]:
-        df_section = get_section(df_raw, section_name)
-        if df_section is not None:
-            df_section['Amount'] = pd.to_numeric(df_section['Amount'], errors='coerce')
-            symbol_regex = re.compile(r'([A-Z]{2,6})\(')
+                                         ('Withholding Tax', 'TAX')]:
             
+        df_section = get_section(df_raw, section_name)
+            
+        if df_section is not None:
+            # 1. Clean Numerics & Dates
+            df_section['Amount'] = pd.to_numeric(df_section['Amount'], errors='coerce').fillna(0)
+            df_section = df_section.dropna(subset=['Date'])
+                
+            # 2. Extract Symbols from Description
+            df_section['Description'] = df_section['Description'].astype(str).str.strip()
+            df_section['parsed_symbol'] = df_section['Description'].str.extract(extract_symbol_regex)[0]
+                
+            # 3. Apply Cleaner (removes trailing lower case, dots, etc.)
+            df_section['parsed_symbol'] = df_section['parsed_symbol'].apply(clean_ibkr_symbol)
+                
+            # 4. Build Events
             for _, row in df_section.iterrows():
-                if pd.isna(row['Date']): continue
-                
-                description_str = str(row['Description'])
-                symbol_match = symbol_regex.search(description_str)
-                symbol = symbol_match.group(1) if symbol_match else None
-                
+                symbol = row['parsed_symbol']
+                    
+                # If regex failed or cleaner returned None, skip (likely not a valid stock event)
+                if pd.isna(symbol):
+                        continue
+
                 all_events.append({
                     'timestamp': pd.to_datetime(row['Date'], format='mixed'),
                     'event_type': event_type,
@@ -191,210 +246,436 @@ def parse_event_log(df_raw, df_trades):
                     'currency': row['Currency']
                 })
 
+
+
+    # --- Parse Interest ---
+    df_interest = get_section(df_raw, 'Interest')
+        
+    if df_interest is not None:
+        # 1. Clean Numerics & Dates
+        df_interest['Amount'] = pd.to_numeric(df_interest['Amount'], errors='coerce').fillna(0)
+        df_interest = df_interest.dropna(subset=['Date'])
+            
+        # 2. Build Events
+        # Interest accrues to the Currency itself, so Symbol = Currency
+        for _, row in df_interest.iterrows():
+            all_events.append({
+                'timestamp': pd.to_datetime(row['Date'], format='mixed'),
+                'event_type': 'INTEREST',
+                'symbol': row['Currency'], # e.g. 'USD', 'CHF'
+                'quantity_change': 0,
+                'cash_change_native': row['Amount'],
+                'currency': row['Currency']
+            })
+
+
+
     # --- 3. Parse Fees ---
-    # (This section is correct, no changes)
+
+    # --- 3a. General Fees (Account Level) ---
+    # These are monthly fees, market data subscriptions, etc.
     df_fees = get_section(df_raw, 'Fees')
     if df_fees is not None:
-         for _, row in df_fees.iterrows():
-            if pd.isna(row['Date']): continue
-                
-            amount = pd.to_numeric(row['Amount'], errors='coerce')
+        # 1. Clean Numerics
+        df_fees['Amount'] = pd.to_numeric(df_fees['Amount'], errors='coerce').fillna(0)
+        df_fees = df_fees.dropna(subset=['Date'])
+        
+        # 2. Build Events
+        for _, row in df_fees.iterrows():
+            amount = row['Amount']
+            # Logic: Positive amount = Rebate, Negative = Fee
             event_type = 'FEE_REBATE' if amount > 0 else 'FEE'
             
             all_events.append({
                 'timestamp': pd.to_datetime(row['Date'], format='mixed'),
                 'event_type': event_type,
-                'symbol': None,
+                'symbol': row['Currency'],  # Apply to Cash (e.g., 'USD')
+                'quantity_change': 0,
+                'cash_change_native': amount,
+                'currency': row['Currency']
+            })
+
+    # --- 3b. Transaction Fees (Trade Specific) ---
+    # These are Stamp Taxes, SEC fees, etc. tied to specific stocks.
+    df_trans_fees = get_section(df_raw, 'Transaction Fees')
+    
+    if df_trans_fees is not None:
+        # 1. Clean Numerics
+        df_trans_fees['Amount'] = pd.to_numeric(df_trans_fees['Amount'], errors='coerce').fillna(0)
+        
+        # 2. Apply Symbol Cleaning (CRITICAL STEP)
+        # This standardizes 'VOW3d' -> 'VOW3' and removes 'RIGHTS.XYZ'
+        df_trans_fees['Symbol'] = df_trans_fees['Symbol'].apply(clean_ibkr_symbol)
+        
+        # 3. Drop rows where Symbol became None (excluded assets) or Date is missing
+        df_trans_fees = df_trans_fees.dropna(subset=['Symbol', 'Date/Time'])
+
+        # 4. Build Events
+        for _, row in df_trans_fees.iterrows():
+            amount = row['Amount']
+            event_type = 'FEE_REBATE' if amount > 0 else 'FEE'
+            
+            all_events.append({
+                'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
+                'event_type': event_type,
+                'symbol': row['Symbol'],
                 'quantity_change': 0,
                 'cash_change_native': amount,
                 'currency': row['Currency']
             })
 
     # --- 4. Parse Deposits & Withdrawals ---
-    # (This section is correct, no changes)
     df_deposits = get_section(df_raw, 'Deposits & Withdrawals')
+    
     if df_deposits is not None:
+        # 1. Clean Numerics & Dates
+        df_deposits['Amount'] = pd.to_numeric(
+            df_deposits['Amount'].astype(str).str.replace(',', ''), 
+            errors='coerce'
+        ).fillna(0)
+        
+        df_deposits = df_deposits.dropna(subset=['Settle Date'])
+
+        # 2. Build Events
         for _, row in df_deposits.iterrows():
-            if pd.isna(row['Settle Date']): continue
-                
-            amount = pd.to_numeric(row['Amount'], errors='coerce')
+            amount = row['Amount']
             event_type = 'DEPOSIT' if amount > 0 else 'WITHDRAWAL'
             
             all_events.append({
                 'timestamp': pd.to_datetime(row['Settle Date'], format='mixed'),
                 'event_type': event_type,
-                'symbol': None,
-                'quantity_change': 0,
+                # CHANGE: Assign the Currency as the symbol (e.g. 'USD')
+                # This aligns with how we treat Cash in the Initial State.
+                'symbol': row['Currency'], 
+                'quantity_change': 0, 
                 'cash_change_native': amount,
                 'currency': row['Currency']
             })
 
     # --- 5. Parse Grant Activity (Stock Awards) ---
-    # (This section is correct, no changes)
     df_grants = get_section(df_raw, 'Grant Activity')
+    
     if df_grants is not None:
+        # 1. Clean Numerics
+        df_grants['Quantity'] = pd.to_numeric(
+            df_grants['Quantity'].astype(str).str.replace(',', ''), 
+            errors='coerce'
+        ).fillna(0)
+        
+        # 2. Apply Symbol Cleaning
+        # Ensures Grant symbols match Trade/OpenPosition symbols
+        df_grants['Symbol'] = df_grants['Symbol'].apply(clean_ibkr_symbol)
+        
+        # 3. Filter
+        # Remove rows where Symbol became None (excluded assets) or Date is missing
+        df_grants = df_grants.dropna(subset=['Symbol', 'Vesting Date'])
+
+        # 4. Build Events
         for _, row in df_grants.iterrows():
-            if pd.isna(row['Vesting Date']): continue
-                
             all_events.append({
                 'timestamp': pd.to_datetime(row['Vesting Date'], format='mixed'),
-                'event_type': 'GIFT_VEST',
-                'symbol': row['Symbol'],
-                'quantity_change': pd.to_numeric(row['Quantity'], errors='coerce'),
-                'cash_change_native': 0,
-                'currency': 'USD' # IBKR is a USD stock
+                'event_type': 'GIFT_VEST', 
+                'symbol': row['Symbol'], # The clean symbol
+                'quantity_change': row['Quantity'],
+                'cash_change_native': 0, 
+                # Note: Grants usually default to USD, but if your report has a 
+                # 'Currency' column in this section, use row['Currency'] instead.
+                'currency': 'USD' 
             })
             
 # --- 6. Parse Corporate Actions ---
-    # Use get_section() to extract the rows that start with 'Corp Actions' and 'Headers' or 'Data'
     df_corp_actions = get_section(df_raw, 'Corporate Actions')
-    # Check if df_corp_actions is empty or not
+    
     if df_corp_actions is not None:
-        # interrows() yields a generator that once called returns a tuple (row index, pd Series of the row)
-        # The "_" is a placeholder variable for the index
-        for _, row in df_corp_actions.iterrows():
-            if pd.isna(row['Date/Time']): continue
-                
-            description_str = str(row['Description'])
-            
-            # --- New Logic: Determine Event Type ---
-            event_type = 'CORP_ACTION' # Default
-            split_ratio = None        # Default
-            
-            if "Split" in description_str:
-                event_type = 'SPLIT'
-                # Parse the "X for Y" ratio
-                split_match = re.search(r'Split (\d+) for (\d+)', description_str)
-                if split_match:
-                    # e.g., "4 for 1" -> split_ratio = 4 / 1 = 4.0
-                    split_ratio = float(split_match.group(1)) / float(split_match.group(2))
-            
-            elif "Dividend Rights Issue" in description_str:
-                event_type = 'RIGHTS_ISSUE'
-            
-            elif "Expire Dividend Right" in description_str:
-                event_type = 'RIGHTS_EXPIRY'
-            
-            # --- New Filter: Skip the bookkeeping events ---
-            # This is a cleaner way to filter than checking the symbol
-            if event_type in ['RIGHTS_ISSUE', 'RIGHTS_EXPIRY']:
-                continue
-                
-            # --- Symbol parsing (your correct regex) ---
-            symbol_match = re.search(r'\(([^,)]+),', description_str)
-            symbol = symbol_match.group(1) if symbol_match else None
-            
-            # --- Build the Event Dictionary ---
-            # This dictionary will be added to the list
-            event_data = {
-                'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
-                'event_type': event_type, # Use the new, smart event_type
-                'symbol': symbol,
-                'currency': row['Currency']
-            }
-            
-            # --- THIS IS THE FIX ---
-            # Set quantity/cash based on the event type
-            if event_type == 'SPLIT':
-                event_data['split_ratio'] = split_ratio
-                event_data['quantity_change'] = 0 # Don't log the redundant quantity
-                event_data['cash_change_native'] = 0 # Splits are non-cash events
-            else:
-                # For any other corp action (e.g., VNAd share delivery)
-                event_data['split_ratio'] = None # Ensure column exists
-                event_data['quantity_change'] = pd.to_numeric(row['Quantity'], errors='coerce')
-                event_data['cash_change_native'] = pd.to_numeric(row['Proceeds'], errors='coerce')
-            
-            all_events.append(event_data)
-
-    # --- Finalize ---
-    if not all_events:
-        return pd.DataFrame(columns=['timestamp', 'event_type', 'symbol', 'quantity_change', 'cash_change_native', 'currency'])
+        # 1. Clean Numerics & Dates
+        df_corp_actions['Quantity'] = pd.to_numeric(
+            df_corp_actions['Quantity'].astype(str).str.replace(',', ''), 
+            errors='coerce'
+        ).fillna(0)
         
+        df_corp_actions['Proceeds'] = pd.to_numeric(
+            df_corp_actions['Proceeds'].astype(str).str.replace(',', ''), 
+            errors='coerce'
+        ).fillna(0)
+
+        df_corp_actions = df_corp_actions.dropna(subset=['Date/Time'])
+
+        # 2. Compile Regex Patterns
+        # Pattern for Splits: "Split 4 for 1"
+        split_regex = re.compile(r'Split\s+(\d+(?:\.\d+)?)\s+for\s+(\d+(?:\.\d+)?)')
+        
+        # Pattern for the "Target" stock in a Rights action.
+        # Looks for: "Expire Dividend Right (TARGET, ..."
+        # We capture the "TARGET" part.
+        rights_target_regex = re.compile(r'Expire Dividend Right\s+\(([A-Za-z0-9]+)[,)]')
+        
+        # Pattern to grab the symbol at the very start of the string (for Splits)
+        start_symbol_regex = re.compile(r'^([A-Za-z0-9]+)(?:\.[A-Za-z0-9]+)?\(')
+
+        # 3. Row-by-Row Parsing (Necessary due to variable logic)
+        for _, row in df_corp_actions.iterrows():
+            desc = str(row['Description'])
+            
+            # --- Scenario A: Splits ---
+            if "Split" in desc:
+                split_match = split_regex.search(desc)
+                if split_match:
+                    # Calculate Ratio (e.g., 4 for 1 = 4.0)
+                    # Note: IBKR descriptions are usually "New for Old". 
+                    # If you hold 1 share and it splits 4 for 1, you now have 4.
+                    numerator = float(split_match.group(1))
+                    denominator = float(split_match.group(2))
+                    ratio = numerator / denominator
+                    
+                    # Extract Symbol from start of string: "IBKR(US...)" -> "IBKR"
+                    sym_match = start_symbol_regex.search(desc)
+                    raw_symbol = sym_match.group(1) if sym_match else None
+                    clean_sym = clean_ibkr_symbol(raw_symbol)
+                    
+                    if clean_sym:
+                        all_events.append({
+                            'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
+                            'event_type': 'SPLIT',
+                            'symbol': clean_sym,
+                            'quantity_change': 0, # Splits don't change quantity via "trade", they change the holding basis.
+                            'cash_change_native': 0,
+                            'currency': row['Currency'],
+                            'split_ratio': ratio 
+                        })
+
+            # --- Scenario B: Dividend Rights (Conversion only) ---
+            elif "Expire Dividend Right" in desc:
+                # Logic: We only care if this expiration results in a STOCK.
+                # Example 1 (Ignore): "...(VNA.DRTS, ...)" -> Cleaner sees dot -> Returns None -> Ignored.
+                # Example 2 (Keep):   "...(VNAd, ...)"     -> Cleaner sees 'd' -> Returns "VNA" -> Kept.
+                
+                target_match = rights_target_regex.search(desc)
+                if target_match:
+                    raw_target = target_match.group(1)
+                    clean_target = clean_ibkr_symbol(raw_target)
+                    
+                    # Only process if we have a valid stock symbol (no dots) and actual quantity change
+                    if clean_target and row['Quantity'] != 0:
+                        all_events.append({
+                            'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
+                            'event_type': 'CORP_ACTION',
+                            'symbol': clean_target,
+                            'quantity_change': row['Quantity'],
+                            'cash_change_native': row['Proceeds'],
+                            'currency': row['Currency'],
+                            'split_ratio': 1.0 # Default for non-splits
+                        })
+            
+            # "Dividend Rights Issue" is explicitly ignored by not having an 'elif' block here.
+
+
+
+# --- Finalize ---
+    # Define the strict column order we expect in the output
+    expected_cols = [
+        'timestamp', 'event_type', 'symbol', 'currency', 
+        'quantity_change', 'cash_change_native', 'split_ratio'
+    ]
+
+    if not all_events:
+        # Return empty DataFrame with the correct schema
+        return pd.DataFrame(columns=expected_cols)
+    
     df_event_log = pd.DataFrame(all_events)
+
+    # 1. Handle Split Ratio Consistency
+    # If no splits occurred, the column might not exist. Create it.
+    if 'split_ratio' not in df_event_log.columns:
+        df_event_log['split_ratio'] = 1.0
+    else:
+        # If splits exist, other rows (Trades, Divs) will have NaN. Fill with 1.0.
+        df_event_log['split_ratio'] = df_event_log['split_ratio'].fillna(1.0)
+
+    # 2. Type Safety (Ensure numbers are floats, not objects)
+    cols_to_numeric = ['quantity_change', 'cash_change_native', 'split_ratio']
+    for col in cols_to_numeric:
+        df_event_log[col] = pd.to_numeric(df_event_log[col], errors='coerce').fillna(0)
+
+    # 3. Sort and Reorder
     df_event_log = df_event_log.sort_values(by='timestamp').reset_index(drop=True)
     
-    return df_event_log
+    # Reindex ensures consistent column order and adds any missing columns (filled with NaN/None)
+    return df_event_log.reindex(columns=expected_cols)
 
-# --- MAIN LOADER FUNCTION (UPDATED) ---
+
+
+# --- MAIN LOADER FUNCTION ---
 
 def load_ibkr_report(filepath):
     """
-    Loads an IBKR Activity Report CSV and parses it into two key DataFrames:
-    1. df_initial_state: The portfolio holdings and cash at the start.
-    2. df_event_log: A chronological log of all transactions and events.
+    Loads an IBKR Activity Report CSV and parses it into key DataFrames
+    and extracts the stated report period and base currency.
     """
     try:
-        # Load the entire file once, without a header
         df_raw = pd.read_csv(
-            filepath,
-            header=None,
-            dtype=object, 
-            on_bad_lines='skip',
-            low_memory=False
+            filepath, header=None, dtype=object, 
+            on_bad_lines='skip', low_memory=False
         )
         
+        # --- Parse Report Period and Base Currency ---
+        report_start_date, report_end_date = None, None
+        base_currency = None
+        
+        try:
+            # Parse Period
+            period_row = df_raw[(df_raw[0] == 'Statement') & (df_raw[2] == 'Period')]
+            period_string = period_row.iloc[0, 3] # e.g., "January 1, 2025 - October 29, 2025"
+            start_str, end_str = period_string.split(' - ')
+            report_start_date = pd.to_datetime(start_str, format='%B %d, %Y').date()
+            report_end_date = pd.to_datetime(end_str, format='%B %d, %Y').date()
+        except Exception as e:
+            print(f"Warning: Could not parse report period string. Will use event log min/max. Error: {e}")
+
+        try:
+            # Parse Base Currency
+            base_curr_row = df_raw[(df_raw[0] == 'Account Information') & (df_raw[2] == 'Base Currency')]
+            base_currency = base_curr_row.iloc[0, 3] # e.g., "CHF"
+        except Exception as e:
+            print(f"Warning: Could not parse Base Currency. Error: {e}")
+
         # --- 1. Build Master Symbol Set & Currency Map ---
         master_symbol_set = set()
         symbol_currency_map = {}
         
-        # Get from Open Positions (reliable for assets held at END)
+        # --- Section A: Open Positions ---
         df_open_pos = get_section(df_raw, 'Open Positions')
         if df_open_pos is not None:
             df_open_pos_stocks = df_open_pos[df_open_pos['Asset Category'] == 'Stocks'].copy()
+    
+            # 1. Fill Currency gaps (IBKR format specific)
             df_open_pos_stocks['Currency'] = df_open_pos_stocks['Currency'].ffill()
+    
+            # 2. Apply Symbol Cleaning Rules
+            df_open_pos_stocks['Symbol'] = df_open_pos_stocks['Symbol'].apply(clean_ibkr_symbol)
+    
+            # 3. Drop symbols that returned None (entries with dots)
+            df_open_pos_stocks = df_open_pos_stocks.dropna(subset=['Symbol'])
+    
+            # 4. Update Map and Set
             map_from_open_pos = df_open_pos_stocks.set_index('Symbol')['Currency'].to_dict()
             symbol_currency_map.update(map_from_open_pos)
             master_symbol_set.update(df_open_pos_stocks['Symbol'].unique())
 
-        # Get from Trades (reliable for ALL assets ever traded)
+        # --- Section B: Trades ---
         df_trades = get_section(df_raw, 'Trades')
         if df_trades is not None:
             df_trade_stocks = df_trades[df_trades['Asset Category'] == 'Stocks'].copy()
+    
+            # 1. Apply Symbol Cleaning Rules
+            df_trade_stocks['Symbol'] = df_trade_stocks['Symbol'].apply(clean_ibkr_symbol)
+            df_trade_stocks = df_trade_stocks.dropna(subset=['Symbol'])
+    
+            # 2. Update Set
             master_symbol_set.update(df_trade_stocks['Symbol'].unique())
-            
-            # Drop duplicates to be efficient for map building
+    
+            # 3. Update Currency Map (only fill missing keys to prefer Open Positions data)
             df_trade_stocks_unique = df_trade_stocks.drop_duplicates(subset=['Symbol'])
             map_from_trades = df_trade_stocks_unique.set_index('Symbol')['Currency'].to_dict()
-            
-            # Update the main map *only* with new symbols.
+    
             for symbol, currency in map_from_trades.items():
                 if symbol not in symbol_currency_map:
                     symbol_currency_map[symbol] = currency
 
-        # Get from Grant Activity
+        # --- Section C: Grant Activity ---
         df_grants = get_section(df_raw, 'Grant Activity')
         if df_grants is not None:
+            # 1. Apply Cleaning
+            df_grants['Symbol'] = df_grants['Symbol'].apply(clean_ibkr_symbol)
+            df_grants = df_grants.dropna(subset=['Symbol'])
+            
+            # 2. Update Set
             master_symbol_set.update(df_grants['Symbol'].unique())
-            # Add IBKR currency if not already present
+            
+            # 3. Handle default IBKR currency
             if 'IBKR' not in symbol_currency_map:
-                 symbol_currency_map['IBKR'] = 'USD' # IBKR is a USD stock
+                symbol_currency_map['IBKR'] = 'USD'
 
-        # Get from Mark-to-Market (for assets held at START)
+        # --- Section D: Mark-to-Market ---
         df_mtm = get_section(df_raw, 'Mark-to-Market Performance Summary')
         if df_mtm is not None:
             df_mtm_stocks = df_mtm[df_mtm['Asset Category'] == 'Stocks'].copy()
-            df_mtm_stocks['Prior Quantity'] = pd.to_numeric(df_mtm_stocks['Prior Quantity'], errors='coerce').fillna(0)
             
-            # Add any stock with a starting quantity > 0 to the master set
-            held_at_start = df_mtm_stocks[df_mtm_stocks['Prior Quantity'] > 0]['Symbol'].unique()
-            master_symbol_set.update(held_at_start)
+            # 1. Numeric Conversion
+            df_mtm_stocks['Prior Quantity'] = pd.to_numeric(
+                df_mtm_stocks['Prior Quantity'], errors='coerce'
+            ).fillna(0)
+            
+            # 2. Filter first, then Clean (efficiency)
+            held_at_start_df = df_mtm_stocks[df_mtm_stocks['Prior Quantity'] > 0].copy()
+            held_at_start_df['Symbol'] = held_at_start_df['Symbol'].apply(clean_ibkr_symbol)
+            held_at_start_df = held_at_start_df.dropna(subset=['Symbol'])
+            
+            # 3. Update Set
+            master_symbol_set.update(held_at_start_df['Symbol'].unique())
         
         # --- 2. Parse Initial State ---
-        # Pass the completed map AND the master set to the parser
         df_initial_state = parse_initial_state(df_mtm, symbol_currency_map, master_symbol_set)
 
-# --- 3. Parse Event Log ---
-        # Pass df_trades to avoid loading it again
+        # --- 3. Parse Event Log ---
         df_event_log = parse_event_log(df_raw, df_trades)
         
         # --- 4. Get Financial Info ---
         df_financial_info = get_section(df_raw, 'Financial Instrument Information')
         
+        if df_financial_info is not None:
+            # 1. Filter for specific columns (Use intersection to avoid KeyErrors)
+            target_cols = ['Symbol', 'Security ID', 'Listing Exch']
+            available_cols = [c for c in target_cols if c in df_financial_info.columns]
+            df_financial_info = df_financial_info[available_cols].copy()
+            
+            # 2. Clean the Symbol
+            # Apply the same logic as Trades/Dividends (e.g., remove 'd' suffix, drop dots)
+            if 'Symbol' in df_financial_info.columns:
+                df_financial_info['Symbol'] = df_financial_info['Symbol'].apply(clean_ibkr_symbol)
+                
+                # Drop rows where symbol became None (excluded assets)
+                df_financial_info = df_financial_info.dropna(subset=['Symbol'])
+
+            # 3. Rename columns
+            # We rename 'Symbol' -> 'symbol' to match the Event Log and Initial State keys
+            rename_map = {
+                'Symbol': 'symbol',
+                'Security ID': 'ISIN',
+                'Listing Exch': 'Exchange'
+            }
+            df_financial_info = df_financial_info.rename(columns=rename_map)
+            
+            # 4. Deduplicate (Optional but recommended)
+            # IBKR often lists the same symbol multiple times (once per exchange). 
+            # We usually want unique Symbol -> ISIN mappings.
+            df_financial_info = df_financial_info.drop_duplicates(subset=['symbol'])
+            
+        else:
+            # Fallback if section is missing
+            df_financial_info = pd.DataFrame(columns=['symbol', 'ISIN', 'Exchange'])
+        
+        # --- 5. Finalize Dates (Fallback) ---
+        if df_event_log.empty and (not report_start_date or not report_end_date):
+            print("Error: Event log is empty and report period could not be parsed. Cannot continue.")
+            return None
+        
+        if report_start_date is None:
+            report_start_date = df_event_log['timestamp'].min().date()
+        if report_end_date is None:
+            report_end_date = df_event_log['timestamp'].max().date()
+            
+        # --- 6. Finalize Base Currency (Fallback) ---
+        if base_currency is None:
+            print("Warning: Base Currency not found. Using 'CHF' as default.")
+            base_currency = 'CHF'
+            
         return {
             'initial_state': df_initial_state,
             'events': df_event_log,
-            'financial_info': df_financial_info # <-- ADD THIS
+            'financial_info': df_financial_info,
+            'report_start_date': report_start_date,
+            'report_end_date': report_end_date,
+            'base_currency': base_currency
         }
         
     except FileNotFoundError:
@@ -405,25 +686,3 @@ def load_ibkr_report(filepath):
         import traceback
         traceback.print_exc()
         return None
-
-# --- Example of how to use this loader ---
-if __name__ == "__main__":
-    
-    # Use the 'raw string' (r'...') for your Windows path
-    # Example: file_path = r'C:\Users\Marvin\data\U13271915_20250101_20251029.csv'
-    file_path = r'U13271915_20250101_20251029.csv' # Assumes file is in same directory
-    
-    # Set pandas display options for better printing
-    pd.set_option('display.max_rows', 100)
-    pd.set_option('display.max_columns', 10)
-    pd.set_option('display.width', 150)
-    
-    report_data = load_ibkr_report(file_path)
-    
-    if report_data:
-        print("--- 1. Initial State DataFrame ---")
-        print(report_data['initial_state'])
-        print("\n" + "="*80 + "\n")
-        
-        print("--- 2. Master Event Log (First 20 Events) ---")
-        print(report_data['events'].head(20))
