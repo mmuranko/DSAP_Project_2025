@@ -1,319 +1,181 @@
 import pandas as pd
+# import numpy as np
 import yfinance as yf
-from datetime import timedelta
-from dateutil.relativedelta import relativedelta
 
-# This map is still required to translate exchange codes to yfinance suffixes
-DEFAULT_EXCHANGE_SUFFIX_MAP = {
-    # USA (No Suffix)
-    'NASDAQ': '', 'NYSE': '', 'ARCA': '',
-    # Switzerland
-    'EBS': '.SW',
-    # Germany
-    'IBIS': '.F',
-    # France
-    'SBF': '.PA',
-    # UK
-    'LSE': '.L',
-    # Italy
-    'BVME': '.MI',
-    # Spain
-    'BM': '.MC',
-}
-
-# --- PRIVATE HELPER 1 (Stocks) ---
-
-def _build_stock_ticker_map(all_stock_symbols, df_financial_info, exchange_suffix_map):
+def fetch_market_data(data_package):
     """
-    Builds the ticker map for STOCKS only.
+    Generates tickers for Stocks and Cash based on specific mapping rules,
+    downloads historical data via yfinance, and maps it back to the original symbol.
     """
-    ticker_map = {}
-    ticker_info_map = {}
+    # Unpack necessary data
+    df_initial = data_package['initial_state']
+    df_info = data_package['financial_info']
+    report_start = data_package['report_start_date']
+    report_end = data_package['report_end_date']
+    base_currency = data_package['base_currency']
 
-    if df_financial_info is None:
-        print("Warning: 'Financial Instrument Information' section is missing for stocks.")
-        for symbol in all_stock_symbols:
-            ticker_map[symbol] = symbol
-            ticker_info_map[symbol] = {'yfinance_ticker': symbol, 'status': 'Missing financial info'}
-        return ticker_map, ticker_info_map
+    # 1. Define Date Range
+    # Report start minus 5 years, respecting the instruction not to touch the dates otherwise
+    start_dt = pd.to_datetime(report_start)
+    download_start = start_dt - pd.DateOffset(years=5)
+    download_end = report_end # Passed directly as requested
 
-    df_financial_info.columns = [str(col).strip() for col in df_financial_info.columns]
-    symbol_col, ticker_col, exchange_col = "Symbol", "Underlying", "Listing Exch"
-    required_cols = [symbol_col, ticker_col, exchange_col]
-
-    if not all(col in df_financial_info.columns for col in required_cols):
-        print(f"CRITICAL ERROR: 'Financial Instrument Information' is missing required columns for stocks.")
-        for symbol in all_stock_symbols:
-            ticker_map[symbol] = symbol
-            ticker_info_map[symbol] = {'yfinance_ticker': symbol, 'status': 'Missing required columns'}
-        return ticker_map, ticker_info_map
-
-    df_valid_instruments = df_financial_info[
-        ~df_financial_info[ticker_col].str.contains(r'\.', na=False)
-    ].copy()
-
-    df_lookup = df_valid_instruments.drop_duplicates(subset=[symbol_col])
-    symbol_to_ticker_map = df_lookup.set_index(symbol_col)[ticker_col].to_dict()
-    symbol_to_exchange_map = df_lookup.set_index(symbol_col)[exchange_col].to_dict()
-
-    for symbol in all_stock_symbols:
-        cleaned_ticker = symbol_to_ticker_map.get(symbol)
-        exchange = symbol_to_exchange_map.get(symbol)
-        status = "OK"
-
-        if not cleaned_ticker:
-            status = f"Skipped (Stock): Symbol '{symbol}' not found in 'Underlying' list."
-            ticker_info_map[symbol] = {'yfinance_ticker': None, 'status': status}
-            continue 
-
-        if not exchange:
-            status = f"Warning (Stock): No exchange for '{symbol}'. Using ticker '{cleaned_ticker}' as-is."
-            suffix = ''
-        else:
-            suffix = exchange_suffix_map.get(exchange)
-            if suffix is None:
-                status = f"Warning (Stock): No suffix for exchange '{exchange}'. Using '{cleaned_ticker}' as-is."
-                suffix = ''
-
-        yfinance_ticker = f"{cleaned_ticker}{suffix}"
-        ticker_map[symbol] = yfinance_ticker
-        ticker_info_map[symbol] = {
-            'asset_type': 'Stock',
-            'original_symbol': symbol,
-            'yfinance_ticker': yfinance_ticker,
-            'status': status
-        }
-    
-    return ticker_map, ticker_info_map
-
-# --- PRIVATE HELPER 2 (FX) ---
-
-def _build_fx_ticker_map(report_data):
-    """
-    Builds the ticker map for FX rates only.
-    """
-    base_currency = report_data.get('base_currency')
-    df_initial_state = report_data['initial_state']
-    
-    all_cash_symbols = set(df_initial_state[
-        df_initial_state['asset_category'] == 'Cash'
-    ]['symbol'].unique())
-    
-    fx_ticker_map = {} # Maps yfinance ticker to original symbol (e.g., 'USDCHF=X': 'USD')
-    fx_info_map = {}   # Maps original symbol to info (e.g., 'USD': {...})
-
-    if not base_currency:
-        print("CRITICAL ERROR: No base_currency found in report_data. Cannot fetch FX rates.")
-        return fx_ticker_map, fx_info_map, None
-
-    for symbol in all_cash_symbols:
-        if symbol == base_currency:
-            # This is the base currency, no ticker needed.
-            fx_info_map[symbol] = {
-                'asset_type': 'FX',
-                'original_symbol': symbol,
-                'yfinance_ticker': 'N/A (Base Currency)',
-                'status': 'OK'
-            }
-        else:
-            # This is a foreign currency, build the ticker
-            yfinance_ticker = f"{symbol}{base_currency}=X"
-            fx_ticker_map[yfinance_ticker] = symbol
-            fx_info_map[symbol] = {
-                'asset_type': 'FX',
-                'original_symbol': symbol,
-                'yfinance_ticker': yfinance_ticker,
-                'status': 'OK'
-            }
-            
-    return fx_ticker_map, fx_info_map, base_currency
-
-# --- MAIN PUBLIC FUNCTION ---
-
-def fetch_market_data(report_data, exchange_suffix_map=DEFAULT_EXCHANGE_SUFFIX_MAP):
-    """
-    Fetches historical market data (Stocks and FX) from yfinance.
-    Fetches data from 5 years *before* the report start date up to the report end date.
-    """
-    
-    # 1. Extract data and get date range
-    df_initial_state = report_data['initial_state']
-    df_events = report_data['events']
-    df_financial_info = report_data.get('financial_info')
-
-    report_start_date = report_data.get('report_start_date')
-    report_end_date = report_data.get('report_end_date')
-    
-    if not report_start_date or not report_end_date:
-         print("Error: Report start/end date not found. Falling back to event log.")
-         if df_events.empty:
-             print("Error: Event log is empty. Cannot determine date range.")
-             return {'data': {}, 'ticker_info': {}}
-         report_start_date = df_events['timestamp'].min().date()
-         report_end_date = df_events['timestamp'].max().date()
-
-    fetch_start_date = report_start_date - relativedelta(years=5)
-    start_str = fetch_start_date.strftime('%Y-%m-%d')
-    end_str = (report_end_date + timedelta(days=1)).strftime('%Y-%m-%d')
-
-    # 2. Identify all unique STOCK symbols (excluding cash)
-    stock_symbols_initial = set(df_initial_state[
-        df_initial_state['asset_category'] == 'Stock'
-    ]['symbol'].unique())
-    stock_symbols_events = set(df_events[df_events['symbol'].notna()]['symbol'].unique())
-    all_cash_symbols = set(df_initial_state[
-        df_initial_state['asset_category'] == 'Cash'
-    ]['symbol'].unique())
-    final_stock_symbols = (stock_symbols_initial | stock_symbols_events) - all_cash_symbols
-    
-    # 3. Build Ticker Maps
-    stock_ticker_map, stock_info_map = _build_stock_ticker_map(
-        final_stock_symbols, df_financial_info, exchange_suffix_map
-    )
-    fx_ticker_map, fx_info_map, base_currency = _build_fx_ticker_map(report_data)
-
-    # Combine all info maps for the final report
-    ticker_info_map = {**stock_info_map, **fx_info_map}
-
-    # 4. Fetch data from yfinance
-    stock_tickers_to_fetch = [t for t in stock_ticker_map.values() if t]
-    fx_tickers_to_fetch = list(fx_ticker_map.keys())
-    
-    unique_yfinance_tickers = sorted(list(set(stock_tickers_to_fetch + fx_tickers_to_fetch)))
-    
-    if not unique_yfinance_tickers:
-        print("No valid yfinance tickers to fetch.")
-        return {'data': {}, 'ticker_info': ticker_info_map}
-
-    print(f"Fetching {len(unique_yfinance_tickers)} tickers (Stocks & FX) from {start_str} to {end_str}...")
-    print(f"Tickers: {', '.join(unique_yfinance_tickers)}")
-    
-    yf_data = yf.download(
-        unique_yfinance_tickers, 
-        start=start_str, 
-        end=end_str, 
-        auto_adjust=False,
-        progress=False,
-        timeout=30 
-    )
-    
-    # 5. Process yfinance results
-    market_data_by_symbol = {}
-    yf_data_map = {} 
-    
-    if yf_data.empty:
-        print("Warning: yfinance.download returned no data for all tickers.")
-    elif len(unique_yfinance_tickers) == 1:
-        ticker = unique_yfinance_tickers[0]
-        if not yf_data.empty: yf_data_map = {ticker: yf_data}
-    elif isinstance(yf_data.columns, pd.MultiIndex):
-        # Use .xs to safely extract data for each ticker
-        yf_data_map = {
-            ticker: yf_data.xs(ticker, level=1, axis=1).dropna(how='all')
-            for ticker in unique_yfinance_tickers 
-            if ticker in yf_data.columns.get_level_values(1)
-        }
-    else:
-        print("Warning: yfinance returned unexpected data format. Failures likely.")
-
-    # 6. Map STOCK data back to original IBKR symbols
-    for original_symbol, yfinance_ticker in stock_ticker_map.items():
-        data = yf_data_map.get(yfinance_ticker) 
-        if data is None or data.empty:
-            if original_symbol in ticker_info_map and ticker_info_map[original_symbol]['status'] == 'OK':
-                print(f"Warning: No data returned for {original_symbol} (ticker: {yfinance_ticker})")
-                ticker_info_map[original_symbol]['status'] = 'Error: yfinance returned no data.'
-            market_data_by_symbol[original_symbol] = pd.DataFrame().rename_axis('Date')
-        else:
-            data_processed = data[['Open', 'High', 'Low', 'Adj Close', 'Volume']].copy()
-            data_processed = data_processed.rename(columns={'Adj Close': 'Close'})
-            market_data_by_symbol[original_symbol] = data_processed
-    
-    # 7. Map FX data back to original symbols
-    any_valid_df = next((df for df in market_data_by_symbol.values() if not df.empty), None)
-    
-    for yfinance_ticker, original_symbol in fx_ticker_map.items():
-        data = yf_data_map.get(yfinance_ticker)
-        if data is None or data.empty:
-            if original_symbol in ticker_info_map and ticker_info_map[original_symbol]['status'] == 'OK':
-                print(f"Warning: No data returned for {original_symbol} (ticker: {yfinance_ticker})")
-                ticker_info_map[original_symbol]['status'] = 'Error: yfinance returned no data.'
-            market_data_by_symbol[original_symbol] = pd.DataFrame().rename_axis('Date')
-        else:
-            # For FX, 'Adj Close' is the rate.
-            data_processed = data[['Open', 'High', 'Low', 'Adj Close', 'Volume']].copy()
-            data_processed = data_processed.rename(columns={'Adj Close': 'Close'})
-            market_data_by_symbol[original_symbol] = data_processed
-            if any_valid_df is None:
-                any_valid_df = data_processed
-                
-    # 8. Create dummy 1.0 DataFrame for BASE CURRENCY
-    if base_currency and any_valid_df is not None:
-        print(f"Creating 1.0 price history for base currency: {base_currency}")
-        # Use the index of the first valid df to get the right date range
-        date_index = any_valid_df.index
-        # Reindex to ensure it covers the full range (for assets with no data)
-        full_date_index = pd.date_range(start=start_str, end=end_str, freq='D')
-        full_date_index = full_date_index[full_date_index <= date_index.max()] # Truncate to match yf data
-        
-        df_base = pd.DataFrame(1.0, index=full_date_index, columns=['Open', 'High', 'Low', 'Close'])
-        df_base['Volume'] = 0.0
-        # Align with the main index from the other assets
-        market_data_by_symbol[base_currency] = df_base.reindex(date_index, method='ffill')
-        
-    elif base_currency:
-        print(f"Warning: Could not create 1.0 price history for {base_currency} (no valid date index found).")
-        market_data_by_symbol[base_currency] = pd.DataFrame().rename_axis('Date')
-        
-    print("Market data fetch complete.")
-    
-    return {
-        'data': market_data_by_symbol,
-        'ticker_info': ticker_info_map
+    # 2. Define Exchange Suffix Map
+    exchange_map = {
+        # USA (No Suffix)
+        'NASDAQ': '', 'NYSE': '', 'ARCA': '',
+        # Switzerland
+        'EBS': '.SW',
+        # Germany
+        'IBIS': '.F',
+        # France
+        'SBF': '.PA',
+        # UK
+        'LSE': '.L',
+        # Italy
+        'BVME': '.MI',
+        # Spain
+        'BM': '.MC',
     }
 
-# --- This main block is for testing ---
-if __name__ == "__main__":
+    # Dictionary to store Symbol -> Market Data DataFrame
+    market_data_results = {}
     
-    try:
-        # Assumes you are running from the root folder (above src)
-        from src import data_loader as dl
-    except ImportError:
-        print("Error: Could not import 'src.data_loader'.")
-        print("Please make sure you are running this script from the root project directory (the folder *above* 'src').")
-        dl = None
-    
-    if dl:
-        file_path = r'data/U13271915_20250101_20251029.csv'
-        print(f"Loading report data from: {file_path}")
-        report_data = dl.load_ibkr_report(file_path)
-        
-        if report_data:
-            print("Report loaded.")
-            print(f"  Stated Report Start: {report_data['report_start_date']}")
-            print(f"  Stated Report End:   {report_data['report_end_date']}")
-            print(f"  Base Currency: {report_data['base_currency']}")
-            
-            print("\nFetching market data (Stocks & FX)...")
-            market_data_bundle = fetch_market_data(report_data)
-            
-            print("\n" + "="*80)
-            print("--- Ticker Info Map (Debugging) ---")
-            import json
-            print(json.dumps(market_data_bundle['ticker_info'], indent=2))
-            print("="*80)
+    # Dictionary to map Symbol -> YFinance Ticker (for internal use)
+    ticker_map = {}
 
-            print("\n--- Fetched Data Summary ---")
-            for symbol, df in market_data_bundle['data'].items():
-                info = market_data_bundle['ticker_info'].get(symbol, {})
-                ticker = info.get('yfinance_ticker', 'N/A')
-                status = info.get('status', 'N/A')
-                asset_type = info.get('asset_type', 'N/A')
+    # --- 3. Build Tickers for Stocks ---
+    # Filter for Stocks in initial state
+    stock_symbols = df_initial[df_initial['asset_category'] == 'Stock']['symbol'].unique()
+
+    for symbol in stock_symbols:
+        # Find the exchange for this symbol in financial_info
+        # Using a safe lookup that handles potential missing info gracefully
+        exchange_row = df_info.loc[df_info['symbol'] == symbol, 'Exchange']
+        
+        if not exchange_row.empty:
+            exchange_code = exchange_row.iloc[0]
+            # Get suffix from map, default to empty string if exchange not in map (or handle as error)
+            suffix = exchange_map.get(exchange_code, '')
+            ticker_map[symbol] = f"{symbol}{suffix}"
+        else:
+            # Fallback if symbol not found in financial_info (assumes no suffix)
+            ticker_map[symbol] = symbol
+
+    # --- 4. Build Tickers for Cash ---
+    # Filter for Cash in initial state
+    cash_symbols = df_initial[df_initial['asset_category'] == 'Cash']['symbol'].unique()
+
+    for symbol in cash_symbols:
+        # If the cash symbol is the same as base currency, we don't need a rate (it is 1.0)
+        # However, the prompt implies getting data for "entries... which are Cash".
+        # Usually, we skip downloading USD=X if base is USD, but if required, we construct it.
+        # We will skip only if symbol == base_currency to avoid download errors or redundant data.
+        if symbol == base_currency:
+            continue
+            
+        # Construct ticker: Base + Symbol + '=X' (e.g., 'USDCHF=X')
+        ticker_map[symbol] = f"{base_currency}{symbol}=X"
+
+    # --- 5. Download Data ---
+    # We iterate through the map to download and assign back to the original symbol key
+    for symbol, ticker in ticker_map.items():
+        try:
+            # Download with specified constraints
+            data = yf.download(
+                ticker, 
+                start=download_start, 
+                end=download_end, 
+                timeout=30, 
+                auto_adjust=False,
+                progress=False # Disables the progress bar to keep logs clean
+            )
+            
+            # Only store if we actually got data
+            if not data.empty:
+                market_data_results[symbol] = data
                 
-                print(f"  Symbol: {symbol} (Type: {asset_type}, Ticker: {ticker})")
-                if not df.empty:
-                    print(f"  Date Range: {df.index.min().date()} to {df.index.max().date()}")
-                    print(f"  Rows: {len(df)}")
-                else:
-                    print(f"  Status: {status}")
-                print("-" * 20)
+        except Exception as e:
+            print(f"Error downloading data for {symbol} (Ticker: {ticker}): {e}")
+
+    return market_data_results
+
+def apply_split_adjustments(data_package):
+    """
+    Adjusts 'initial_state' and 'events' for stock splits using vectorized 
+    cumulative products. Returns dictionary with EXACT structure as input,
+    plus the added market data.
+    """
+    # Unpack and copy to avoid side-effects
+    df_initial = data_package['initial_state'].copy()
+    df_events = data_package['events'].copy()
+    report_start = data_package['report_start_date']
+
+    # --- 1. Prepare Event Data ---
+    # Sort by symbol and time to ensure cumulative math is correct
+    df_events = df_events.sort_values(by=['symbol', 'timestamp'])
+
+    # Calculate Split Factors
+    grouped_ratios = df_events.groupby('symbol')['split_ratio']
+    
+    # Calculate intermediate columns (we will drop them later)
+    df_events['running_factor'] = grouped_ratios.cumprod()
+    df_events['total_factor'] = grouped_ratios.transform('prod')
+    df_events['multiplier'] = df_events['total_factor'] / df_events['running_factor']
+
+    # --- 2. Adjust Initial State ---
+    if not df_initial.empty:
+        # Find the 'running_factor' valid at the exact moment of report_start.
+        mask_past = df_events['timestamp'] <= report_start
+        last_known_factor = df_events.loc[mask_past].groupby('symbol')['running_factor'].last()
+        
+        # Map factors to initial state
+        # 1. Get Total Factor for the symbol
+        initial_total = df_initial['symbol'].map(
+            df_events.groupby('symbol')['total_factor'].first()
+        ).fillna(1.0)
+        
+        # 2. Get Running Factor at start date (fill with 1.0 if no past events exist)
+        initial_running = df_initial['symbol'].map(last_known_factor).fillna(1.0)
+        
+        # 3. Apply Adjustment
+        df_initial['quantity'] = df_initial['quantity'] * (initial_total / initial_running)
+
+    # --- 3. Adjust Event Log ---
+    # Simply multiply the pre-calculated multiplier
+    df_events['quantity_change'] = df_events['quantity_change'] * df_events['multiplier']
+
+    # --- 4. Cleanup and Restore Order ---
+    # Drop helper columns
+    df_events = df_events.drop(columns=['running_factor', 'total_factor', 'multiplier'])
+    
+    # Re-sort by timestamp to return to chronological order
+    df_events = df_events.sort_values(by='timestamp')
+
+    # Assign to specific variable names for clarity in return
+    df_initial_state_adj = df_initial
+    df_event_log_adj = df_events
+
+    # Update the package with adjusted data so the fetch function uses the correct state if needed
+    # (Though fetch currently only needs symbols, passing the updated state is cleaner)
+    updated_package = {
+        'initial_state': df_initial_state_adj,
+        'events': df_event_log_adj,
+        'financial_info': data_package['financial_info'],
+        'report_start_date': data_package['report_start_date'],
+        'report_end_date': data_package['report_end_date'],
+        'base_currency': data_package['base_currency']
+    }
+
+    # --- 5. Fetch Market Data ---
+    market_data = fetch_market_data(updated_package)
+
+    return {
+        'initial_state': df_initial_state_adj,
+        'events': df_event_log_adj,
+        'financial_info': data_package['financial_info'],
+        'report_start_date': data_package['report_start_date'],
+        'report_end_date': data_package['report_end_date'],
+        'base_currency': data_package['base_currency'],
+        'market_data': market_data
+    }

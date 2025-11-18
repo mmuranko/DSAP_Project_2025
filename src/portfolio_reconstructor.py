@@ -168,7 +168,7 @@ if __name__ == "__main__":
     try:
         import data_loader as dl
         import market_data_loader as mdl
-        import portfolio_processor as pp
+        import data_processor as pp
     except ImportError:
         print("Error: Could not import other modules (data_loader, market_data_loader, portfolio_processor).")
         print("Please run this script from your main project folder (the one containing 'src').")
