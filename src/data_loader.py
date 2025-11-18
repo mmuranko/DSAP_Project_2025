@@ -138,9 +138,16 @@ def parse_event_log(df_raw, df_trades):
         df_stock_trades['Proceeds'] = pd.to_numeric(df_stock_trades['Proceeds'], errors='coerce').fillna(0)
         df_stock_trades['Comm/Fee'] = pd.to_numeric(df_stock_trades['Comm/Fee'], errors='coerce').fillna(0)
 
+        # This handles "2025-02-03, 09:03:28"
+        df_stock_trades['Date/Time'] = pd.to_datetime(
+            df_stock_trades['Date/Time'], 
+            format='%Y-%m-%d, %H:%M:%S'
+        )
+
         # 4. Build Events
         for _, row in df_stock_trades.iterrows():
-            timestamp = pd.to_datetime(row['Date/Time'], format='mixed')
+            timestamp = row['Date/Time']
+            
             quantity_change = row['Quantity']
             
             all_events.append({
@@ -182,9 +189,16 @@ def parse_event_log(df_raw, df_trades):
                 errors='coerce'
             ).fillna(0)
 
-            # 3. Build Events (Loop is now safe and clean)
+            # Vectorized conversion before the loop
+            # Matches "2025-03-04, 22:13:15"
+            df_fx_trades['Date/Time'] = pd.to_datetime(
+                df_fx_trades['Date/Time'], 
+                format='%Y-%m-%d, %H:%M:%S'
+            )
+
+            # 3. Build Events 
             for _, row in df_fx_trades.iterrows():
-                timestamp = pd.to_datetime(row['Date/Time'], format='mixed')
+                timestamp = row['Date/Time']
                 
                 # Side A: The Base Currency (Quantity column applies here)
                 all_events.append({
@@ -212,33 +226,39 @@ def parse_event_log(df_raw, df_trades):
     # Regex: Capture start word, ignore optional .Suffix, expect opening parenthesis
     extract_symbol_regex = r'^([A-Za-z0-9]+)(?:\.[A-Za-z0-9]+)?\('
 
-    for section_name, event_type in [('Dividends', 'DIVIDEND'), 
-                                         ('Withholding Tax', 'TAX')]:
+    for section_name, event_type in [('Dividends', 'DIVIDEND'), ('Withholding Tax', 'TAX')]:
             
         df_section = get_section(df_raw, section_name)
             
         if df_section is not None:
-            # 1. Clean Numerics & Dates
+            # 1. Clean Numerics
             df_section['Amount'] = pd.to_numeric(df_section['Amount'], errors='coerce').fillna(0)
+            
+            # Matches "24/04/2025" -> 2025-04-24 00:00:00
+            df_section['Date'] = pd.to_datetime(
+                df_section['Date'], 
+                format='%d/%m/%Y'
+            )
+
+            # Drop rows where Date parsing failed (or was originally missing)
             df_section = df_section.dropna(subset=['Date'])
                 
             # 2. Extract Symbols from Description
             df_section['Description'] = df_section['Description'].astype(str).str.strip()
             df_section['parsed_symbol'] = df_section['Description'].str.extract(extract_symbol_regex)[0]
                 
-            # 3. Apply Cleaner (removes trailing lower case, dots, etc.)
+            # 3. Apply Cleaner
             df_section['parsed_symbol'] = df_section['parsed_symbol'].apply(clean_ibkr_symbol)
                 
             # 4. Build Events
             for _, row in df_section.iterrows():
                 symbol = row['parsed_symbol']
                     
-                # If regex failed or cleaner returned None, skip (likely not a valid stock event)
                 if pd.isna(symbol):
                         continue
 
                 all_events.append({
-                    'timestamp': pd.to_datetime(row['Date'], format='mixed'),
+                    'timestamp': row['Date'],
                     'event_type': event_type,
                     'symbol': symbol,
                     'quantity_change': 0,
@@ -252,17 +272,24 @@ def parse_event_log(df_raw, df_trades):
     df_interest = get_section(df_raw, 'Interest')
         
     if df_interest is not None:
-        # 1. Clean Numerics & Dates
+        # 1. Clean Numerics
         df_interest['Amount'] = pd.to_numeric(df_interest['Amount'], errors='coerce').fillna(0)
+        
+        # Matches "04/06/2025" -> 2025-06-04 00:00:00
+        df_interest['Date'] = pd.to_datetime(
+            df_interest['Date'], 
+            format='%d/%m/%Y'
+        )
+
+        # Drop rows where Date is missing (or became NaT if parsing failed)
         df_interest = df_interest.dropna(subset=['Date'])
             
         # 2. Build Events
-        # Interest accrues to the Currency itself, so Symbol = Currency
         for _, row in df_interest.iterrows():
             all_events.append({
-                'timestamp': pd.to_datetime(row['Date'], format='mixed'),
+                'timestamp': row['Date'],
                 'event_type': 'INTEREST',
-                'symbol': row['Currency'], # e.g. 'USD', 'CHF'
+                'symbol': row['Currency'], 
                 'quantity_change': 0,
                 'cash_change_native': row['Amount'],
                 'currency': row['Currency']
@@ -278,36 +305,51 @@ def parse_event_log(df_raw, df_trades):
     if df_fees is not None:
         # 1. Clean Numerics
         df_fees['Amount'] = pd.to_numeric(df_fees['Amount'], errors='coerce').fillna(0)
+
+        # 2. Parse Dates with Safety
+        # errors='coerce' turns the empty dates in "Total" rows into NaT
+        df_fees['Date'] = pd.to_datetime(
+            df_fees['Date'], 
+            format='%d/%m/%Y',
+            errors='coerce' 
+        )
+
+        # 3. Filter out Total rows
+        # This removes "Total", "Total in CHF", etc. because they have no Date.
         df_fees = df_fees.dropna(subset=['Date'])
-        
-        # 2. Build Events
+
+        # 4. Build Events
         for _, row in df_fees.iterrows():
             amount = row['Amount']
             # Logic: Positive amount = Rebate, Negative = Fee
             event_type = 'FEE_REBATE' if amount > 0 else 'FEE'
             
             all_events.append({
-                'timestamp': pd.to_datetime(row['Date'], format='mixed'),
+                'timestamp': row['Date'],
                 'event_type': event_type,
-                'symbol': row['Currency'],  # Apply to Cash (e.g., 'USD')
+                'symbol': row['Currency'],
                 'quantity_change': 0,
                 'cash_change_native': amount,
                 'currency': row['Currency']
             })
 
     # --- 3b. Transaction Fees (Trade Specific) ---
-    # These are Stamp Taxes, SEC fees, etc. tied to specific stocks.
     df_trans_fees = get_section(df_raw, 'Transaction Fees')
     
     if df_trans_fees is not None:
         # 1. Clean Numerics
         df_trans_fees['Amount'] = pd.to_numeric(df_trans_fees['Amount'], errors='coerce').fillna(0)
         
-        # 2. Apply Symbol Cleaning (CRITICAL STEP)
-        # This standardizes 'VOW3d' -> 'VOW3' and removes 'RIGHTS.XYZ'
+        # 2. Apply Symbol Cleaning
         df_trans_fees['Symbol'] = df_trans_fees['Symbol'].apply(clean_ibkr_symbol)
         
-        # 3. Drop rows where Symbol became None (excluded assets) or Date is missing
+        # Vectorized conversion matching "2025-03-18, 20:20:00"
+        df_trans_fees['Date/Time'] = pd.to_datetime(
+            df_trans_fees['Date/Time'], 
+            format='%Y-%m-%d, %H:%M:%S'
+        )
+
+        # 3. Drop rows where Symbol or Date is missing
         df_trans_fees = df_trans_fees.dropna(subset=['Symbol', 'Date/Time'])
 
         # 4. Build Events
@@ -316,7 +358,7 @@ def parse_event_log(df_raw, df_trades):
             event_type = 'FEE_REBATE' if amount > 0 else 'FEE'
             
             all_events.append({
-                'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
+                'timestamp': row['Date/Time'],
                 'event_type': event_type,
                 'symbol': row['Symbol'],
                 'quantity_change': 0,
@@ -328,12 +370,19 @@ def parse_event_log(df_raw, df_trades):
     df_deposits = get_section(df_raw, 'Deposits & Withdrawals')
     
     if df_deposits is not None:
-        # 1. Clean Numerics & Dates
+        # 1. Clean Numerics
         df_deposits['Amount'] = pd.to_numeric(
             df_deposits['Amount'].astype(str).str.replace(',', ''), 
             errors='coerce'
         ).fillna(0)
         
+        # Vectorized conversion matching "25/02/2025"
+        df_deposits['Settle Date'] = pd.to_datetime(
+            df_deposits['Settle Date'], 
+            format='%d/%m/%Y'
+        )
+
+        # Drop rows where Settle Date is missing
         df_deposits = df_deposits.dropna(subset=['Settle Date'])
 
         # 2. Build Events
@@ -342,10 +391,8 @@ def parse_event_log(df_raw, df_trades):
             event_type = 'DEPOSIT' if amount > 0 else 'WITHDRAWAL'
             
             all_events.append({
-                'timestamp': pd.to_datetime(row['Settle Date'], format='mixed'),
+                'timestamp': row['Settle Date'],
                 'event_type': event_type,
-                # CHANGE: Assign the Currency as the symbol (e.g. 'USD')
-                # This aligns with how we treat Cash in the Initial State.
                 'symbol': row['Currency'], 
                 'quantity_change': 0, 
                 'cash_change_native': amount,
@@ -363,23 +410,25 @@ def parse_event_log(df_raw, df_trades):
         ).fillna(0)
         
         # 2. Apply Symbol Cleaning
-        # Ensures Grant symbols match Trade/OpenPosition symbols
         df_grants['Symbol'] = df_grants['Symbol'].apply(clean_ibkr_symbol)
         
+        # Vectorized conversion matching "28/03/2025"
+        df_grants['Vesting Date'] = pd.to_datetime(
+            df_grants['Vesting Date'], 
+            format='%d/%m/%Y'
+        )
+
         # 3. Filter
-        # Remove rows where Symbol became None (excluded assets) or Date is missing
         df_grants = df_grants.dropna(subset=['Symbol', 'Vesting Date'])
 
         # 4. Build Events
         for _, row in df_grants.iterrows():
             all_events.append({
-                'timestamp': pd.to_datetime(row['Vesting Date'], format='mixed'),
+                'timestamp': row['Vesting Date'],
                 'event_type': 'GIFT_VEST', 
-                'symbol': row['Symbol'], # The clean symbol
+                'symbol': row['Symbol'],
                 'quantity_change': row['Quantity'],
                 'cash_change_native': 0, 
-                # Note: Grants usually default to USD, but if your report has a 
-                # 'Currency' column in this section, use row['Currency'] instead.
                 'currency': 'USD' 
             })
             
@@ -397,6 +446,12 @@ def parse_event_log(df_raw, df_trades):
             df_corp_actions['Proceeds'].astype(str).str.replace(',', ''), 
             errors='coerce'
         ).fillna(0)
+
+        # Vectorized conversion matching "2025-05-28, 20:25:00"
+        df_corp_actions['Date/Time'] = pd.to_datetime(
+            df_corp_actions['Date/Time'], 
+            format='%Y-%m-%d, %H:%M:%S'
+        )
 
         df_corp_actions = df_corp_actions.dropna(subset=['Date/Time'])
 
@@ -434,7 +489,7 @@ def parse_event_log(df_raw, df_trades):
                     
                     if clean_sym:
                         all_events.append({
-                            'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
+                            'timestamp': row['Date/Time'],
                             'event_type': 'SPLIT',
                             'symbol': clean_sym,
                             'quantity_change': 0, # Splits don't change quantity via "trade", they change the holding basis.
@@ -457,7 +512,7 @@ def parse_event_log(df_raw, df_trades):
                     # Only process if we have a valid stock symbol (no dots) and actual quantity change
                     if clean_target and row['Quantity'] != 0:
                         all_events.append({
-                            'timestamp': pd.to_datetime(row['Date/Time'], format='mixed'),
+                            'timestamp': row['Date/Time'],
                             'event_type': 'CORP_ACTION',
                             'symbol': clean_target,
                             'quantity_change': row['Quantity'],
@@ -518,16 +573,23 @@ def load_ibkr_report(filepath):
         )
         
         # --- Parse Report Period and Base Currency ---
+        # default values
         report_start_date, report_end_date = None, None
-        base_currency = None
+        base_currency = 'CHF'
         
         try:
             # Parse Period
             period_row = df_raw[(df_raw[0] == 'Statement') & (df_raw[2] == 'Period')]
             period_string = period_row.iloc[0, 3] # e.g., "January 1, 2025 - October 29, 2025"
             start_str, end_str = period_string.split(' - ')
-            report_start_date = pd.to_datetime(start_str, format='%B %d, %Y').date()
-            report_end_date = pd.to_datetime(end_str, format='%B %d, %Y').date()
+            
+            # 1. Parse and Normalize (sets to 00:00:00)
+            report_start_date = pd.to_datetime(start_str, format='%B %d, %Y').normalize()
+            report_end_date = pd.to_datetime(end_str, format='%B %d, %Y').normalize()
+
+            # 2. Add 24 hours to the end date
+            # This turns "2025-10-29 00:00:00" into "2025-10-30 00:00:00"
+            report_end_date = report_end_date + pd.Timedelta(days=1)
         except Exception as e:
             print(f"Warning: Could not parse report period string. Will use event log min/max. Error: {e}")
 
@@ -653,21 +715,6 @@ def load_ibkr_report(filepath):
         else:
             # Fallback if section is missing
             df_financial_info = pd.DataFrame(columns=['symbol', 'ISIN', 'Exchange'])
-        
-        # --- 5. Finalize Dates (Fallback) ---
-        if df_event_log.empty and (not report_start_date or not report_end_date):
-            print("Error: Event log is empty and report period could not be parsed. Cannot continue.")
-            return None
-        
-        if report_start_date is None:
-            report_start_date = df_event_log['timestamp'].min().date()
-        if report_end_date is None:
-            report_end_date = df_event_log['timestamp'].max().date()
-            
-        # --- 6. Finalize Base Currency (Fallback) ---
-        if base_currency is None:
-            print("Warning: Base Currency not found. Using 'CHF' as default.")
-            base_currency = 'CHF'
             
         return {
             'initial_state': df_initial_state,
