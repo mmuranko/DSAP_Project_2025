@@ -1,68 +1,144 @@
 import pandas as pd
 import numpy as np
 
+# ==========================================
+# SECTION 1: SPLIT ADJUSTMENT ENGINE
+# ==========================================
+
 def apply_split_adjustments(data_package):
     """
     Adjusts 'initial_state' and 'events' for stock splits using vectorized 
-    cumulative products. Returns dictionary with EXACT structure as input.
+    cumulative products. 
+    
+    LOGIC SUMMARY:
+    Instead of iterating through events chronologically and updating a 'holding' variable,
+    we calculate a 'multiplier' for every single row in the dataset at once.
+    
+    The Multiplier for any given event = (Total Cumulative Split Ratio) / (Running Cumulative Ratio at that time).
+    
+    Example (4:1 Split happens in the middle of the year):
+    - Total Split Ratio for the year = 4.
+    - Events BEFORE the split have a running ratio of 1. Multiplier = 4/1 = 4.
+    - Events AFTER the split have a running ratio of 4. Multiplier = 4/4 = 1 (No change).
     """
-    # Unpack and copy to avoid side-effects
+    
+    # Unpack and copy to avoid side-effects (modifying the original dict passed by reference)
     df_initial = data_package['initial_state'].copy()
     df_events = data_package['events'].copy()
     report_start = data_package['report_start_date']
 
+    # --- 0. Handle Retroactive Events (Time Travel) ---
+    mask_prior = df_events['timestamp'] < report_start
+    
+    if mask_prior.any():
+        print(f"Processor: Moved {mask_prior.sum()} historical events to start date {report_start.date()}")
+        df_events.loc[mask_prior, 'timestamp'] = report_start
+
+        # Goal: If we moved a tax event to Day 0, but we DO NOT hold the stock 
+        # and NEVER trade it, we should uncouple the event from the symbol 
+        # so it doesn't create an empty column in our portfolio matrix (cf. portfolio_reconstructor.py)
+        
+        # 1. Identify the specific rows we just moved
+        # Note: We use the mask we just created
+        moved_rows_indices = df_events[mask_prior].index
+        
+        # 2. Define the "Valid Universe" of stocks
+        # A stock is valid if it is in the Initial State...
+        initial_symbols = set(df_initial['symbol'].unique())
+        
+        # ... OR if it appears in any event that wasn't a "Time Travel" event
+        # (i.e., legitimate trades happening within the report window)
+        active_rows_mask = ~df_events.index.isin(moved_rows_indices)
+        active_symbols = set(df_events.loc[active_rows_mask, 'symbol'].dropna().unique())
+        
+        valid_universe = initial_symbols.union(active_symbols)
+        
+        # 3. Neutralize Ghosts
+        # We look at the moved rows. If their symbol is NOT in the valid universe,
+        # we set the symbol to None.
+        # The Cash Engine will still see the 'cash_change', but the 
+        # Securities Engine will ignore the row because the symbol is missing.
+        
+        ghost_mask = mask_prior & ~df_events['symbol'].isin(valid_universe)
+        
+        ghost_count = ghost_mask.sum()
+        if ghost_count > 0:
+            print(f"Processor: Detached symbol from {ghost_count} historical tax events (Ghost Assets).")
+            df_events.loc[ghost_mask, 'symbol'] = None
+        # ============================================================
+
     # --- 1. Prepare Event Data ---
-    # Sort by symbol and time to ensure cumulative math is correct
+    
+    # EXPLANATION: Sorting is Critical
+    # Cumulative products rely entirely on row order. We must ensure the timeline is strictly chronological
+    # so the 'running factor' accumulates correctly from past to future.
     df_events = df_events.sort_values(by=['symbol', 'timestamp'])
 
-    # Calculate Split Factors
-    # Logic: The multiplier needed for any record is the Total Split Ratio 
-    # divided by the Cumulative Ratio at that specific moment.
-    # Example (4:1 split): 
-    # Pre-split: Total(4) / Running(1) = 4x Multiplier.
-    # Post-split: Total(4) / Running(4) = 1x Multiplier.
-    
+    # EXPLANATION: GroupBy Object
+    # We create a groupby object once to avoid repeatedly specifying ('symbol') in subsequent operations.
+    # This prepares the engine to treat each stock's timeline independently.
     grouped_ratios = df_events.groupby('symbol')['split_ratio']
     
-    # Calculate intermediate columns (we will drop them later)
+    # EXPLANATION: Vectorized Cumulative Product (.cumprod)
+    # Calculates the running product of split ratios *down* the column for each symbol.
+    # Row 1 (Ratio 1.0) -> Running 1.0
+    # Row 2 (Ratio 1.0) -> Running 1.0
+    # Row 3 (Split 4.0) -> Running 4.0
+    # Row 4 (Ratio 1.0) -> Running 4.0
     df_events['running_factor'] = grouped_ratios.cumprod()
+    
+    # EXPLANATION: Vectorized Broadcast (.transform)
+    # .transform('prod') calculates the TOTAL product for the group (e.g., 4.0) 
+    # and broadcasts that single value to EVERY row in that group.
+    # This allows us to divide the "Final State" by the "Current State" in one vector operation.
     df_events['total_factor'] = grouped_ratios.transform('prod')
+    
+    # Calculate the retroactive multiplier
     df_events['multiplier'] = df_events['total_factor'] / df_events['running_factor']
 
     # --- 2. Adjust Initial State ---
     if not df_initial.empty:
-        # Find the 'running_factor' valid at the exact moment of report_start.
-        # This is the last known cumprod from events occurring <= report_start.
+        # EXPLANATION: Time-Travel Masking
+        # We need to know what the split factor was specifically at the moment the report started.
+        # We filter for events that happened in the past (<= report_start).
         mask_past = df_events['timestamp'] <= report_start
+        
+        # We take the .last() running factor from the past events to define the "state at start date".
         last_known_factor = df_events.loc[mask_past].groupby('symbol')['running_factor'].last()
         
-        # Map factors to initial state
-        # 1. Get Total Factor for the symbol
+        # EXPLANATION: Map & Fill
+        # We map these calculated factors back to the initial_state DataFrame based on 'symbol'.
+        # .fillna(1.0) handles stocks that had no events/splits (default multiplier is 1).
+        
+        # 1. Get the Total Factor (The final target universe ratio)
         initial_total = df_initial['symbol'].map(
             df_events.groupby('symbol')['total_factor'].first()
         ).fillna(1.0)
         
-        # 2. Get Running Factor at start date (fill with 1.0 if no past events exist)
+        # 2. Get the Running Factor (The ratio at the start of the report)
         initial_running = df_initial['symbol'].map(last_known_factor).fillna(1.0)
         
-        # 3. Apply Adjustment
+        # 3. Apply Adjustment to Initial Quantity
         df_initial['quantity'] = df_initial['quantity'] * (initial_total / initial_running)
 
     # --- 3. Adjust Event Log ---
-    # Simply multiply the pre-calculated multiplier
+    # EXPLANATION: Vectorized Multiplication
+    # We simply multiply the entire 'quantity_change' column by our calculated 'multiplier' column.
+    # This adjusts pre-split trades (e.g., Buy 10 becomes Buy 40) while leaving post-split trades alone.
     df_events['quantity_change'] = df_events['quantity_change'] * df_events['multiplier']
 
     # --- 4. Cleanup and Restore Order ---
-    # Drop helper columns
+    # Remove the temporary math columns to keep the DataFrame clean
     df_events = df_events.drop(columns=['running_factor', 'total_factor', 'multiplier'])
     
-    # Re-sort by timestamp to return to chronological order
+    # Re-sort by timestamp strictly to ensure the returned log is chronological (mixed symbols allowed)
     df_events = df_events.sort_values(by='timestamp')
 
     # Assign to specific variable names for clarity in return
     df_initial_state_adj = df_initial
     df_event_log_adj = df_events
 
+    # Return dict ensuring the structure matches the input 'data_package' exactly
     return {
         'initial_state': df_initial_state_adj,
         'events': df_event_log_adj,

@@ -2,3 +2,5 @@ pandas
 yfinance
 python-dateutil
 openpyxl
+matplotlib
+seaborn
