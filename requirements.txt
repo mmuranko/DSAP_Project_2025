@@ -4,3 +4,4 @@ python-dateutil
 openpyxl
 matplotlib
 seaborn
+scipy

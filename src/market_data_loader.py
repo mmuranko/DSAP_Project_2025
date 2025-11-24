@@ -24,8 +24,7 @@ def load_market_data(data_package):
     # --- 2. Define Ticker Logic ---
     
     # Map of Exchange codes to Yahoo Finance suffixes.
-    # NOTE: This requires manual maintenance. New exchanges will default to '' (US),
-    # potentially causing download errors if the suffix is actually required.
+    # NOTE: This requires manual maintenance. New exchanges will default to '' (US)
     exchange_suffix_map = {
         # --- Americas ---
         'NASDAQ': '',     # US
@@ -169,27 +168,25 @@ def load_market_data(data_package):
                                 curr = t.info.get('currency', 'GBP')
 
                             if curr == 'GBp':
-                                # Define the columns that are monetary values
-                                price_cols = ['Open', 'High', 'Low', 'Close', 'Adj Close']
+                                # FIX: Added 'Dividends' to the list so it gets scaled to GBP too
+                                monetary_cols = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Dividends'] 
 
                                 # Find which of these are actually in your DataFrame columns
-                                cols_to_fix = [c for c in price_cols if c in df.columns]
+                                cols_to_fix = [c for c in monetary_cols if c in df.columns]
 
                                 # Apply the math ONLY to those columns
-                                df[cols_to_fix] = df[cols_to_fix] / 100
+                                df[cols_to_fix] = df[cols_to_fix] / 100.0
 
                         except Exception as e:
                             print(f"Could not verify currency for {ticker}: {e}")
                 
                 if not df.empty:
-                    # --- KEY FIX START ---
                     # For Stocks: Store by Symbol (e.g. 'NESN') so Reconstructor finds it via df_holdings columns.
                     # For FX: Store by Ticker (e.g. 'USDCHF=X') so Reconstructor finds it via constructed FX string.
                     if '=X' in ticker:
                         market_data_map[ticker] = df
                     else:
                         market_data_map[sym] = df
-                    # --- KEY FIX END ---
                 else:
                     print(f"Warning: Downloaded data for '{sym}' ({ticker}) was empty.")
             
