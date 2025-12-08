@@ -39,7 +39,7 @@ def get_section(df_raw, section_name):
     except IndexError:
         return None
     except Exception as e:
-        print(f"Error parsing section '{section_name}': {e}")
+        print(f"       [!] Warning: Error parsing section '{section_name}': {e}")
         return None
 
 def clean_symbol(symbol):
@@ -89,7 +89,7 @@ def parse_initial_state(df_mtm, symbol_currency_map, master_symbol_set):
     Builds the portfolio snapshot as it existed at the START of the report period.
     """
     if df_mtm is None:
-        print("Warning: 'Mark-to-Market Performance Summary' section not found.")
+        print("       [!] Warning: 'Mark-to-Market Performance Summary' section missing. Initial state empty.")
         return pd.DataFrame(columns=['symbol', 'asset_category', 'currency', 'quantity', 'value_native'])
 
     # --- 1. Process Stocks ---
@@ -311,25 +311,6 @@ def parse_event_log(df_raw, df_trades):
                 'currency': row['Currency']
             })
 
-    # --- F. Grant Activity (Stock Awards) ---
-    df_grants = get_section(df_raw, 'Grant Activity')
-    if df_grants is not None:
-        df_grants['Quantity'] = clean_number(df_grants['Quantity'])
-        
-        df_grants['Symbol'] = df_grants['Symbol'].apply(clean_symbol)
-        df_grants['Vesting Date'] = pd.to_datetime(df_grants['Vesting Date'], format='%d/%m/%Y')
-        df_grants = df_grants.dropna(subset=['Symbol', 'Vesting Date'])
-
-        for _, row in df_grants.iterrows():
-            all_events.append({
-                'timestamp': row['Vesting Date'],
-                'event_type': 'GIFT_VEST', 
-                'symbol': row['Symbol'],
-                'quantity_change': row['Quantity'],
-                'cash_change_native': 0,
-                'currency': 'USD' 
-            })
-
     # --- G. Corporate Actions (Splits/Rights) ---
     df_corp_actions = get_section(df_raw, 'Corporate Actions')
     if df_corp_actions is not None:
@@ -406,7 +387,7 @@ def parse_event_log(df_raw, df_trades):
     return df_event_log.reindex(columns=expected_cols)
 
 # ==========================================
-# SECTION 3: MAIN ORCHESTRATOR
+# SECTION 3: MAIN PART
 # ==========================================
 
 def load_ibkr_report(filepath):
@@ -414,6 +395,9 @@ def load_ibkr_report(filepath):
     Main entry point. Reads the CSV, discovers symbols/currencies, 
     and orchestrates the parsing of initial state and event logs.
     """
+
+    print(f"   [>] Reading IBKR report: {filepath}")
+
     try:
         # Robust CSV Loading: 
         # - header=None: IBKR files are stacked tables, so there is no single header row.
@@ -435,15 +419,16 @@ def load_ibkr_report(filepath):
             report_start_date = pd.to_datetime(start_str, format='%B %d, %Y').normalize()
             report_end_date = pd.to_datetime(end_str, format='%B %d, %Y').normalize() + pd.Timedelta(days=1)
         except Exception as e:
-            print(f"Warning parsing dates: {e}")
+            print(f"       [!] Warning parsing dates: {e}")
 
         try:
             base_curr_row = df_raw[(df_raw[0] == 'Account Information') & (df_raw[2] == 'Base Currency')]
             base_currency = base_curr_row.iloc[0, 3]
         except Exception as e:
-            print(f"Warning parsing Base Currency: {e}")
+            print(f"       [!] Warning parsing Base Currency: {e}")
 
         # --- 2. Symbol Discovery Phase ---
+
         master_symbol_set = set()
         symbol_currency_map = {}
         
@@ -515,7 +500,24 @@ def load_ibkr_report(filepath):
             }).drop_duplicates(subset=['symbol'])
         else:
             df_financial_info = pd.DataFrame(columns=['symbol', 'ISIN', 'Exchange'])
-            
+        
+        # --- 4. Critical Validation ---
+        if report_start_date is None or report_end_date is None:
+            print("   [!] CRITICAL ERROR: Could not parse Report Period (Start/End dates).")
+            print("       The input file format might have changed.")
+            return None
+
+        if df_initial_state.empty and df_event_log.empty:
+            print("   [!] CRITICAL ERROR: No positions or events found.")
+            print("       Check if the CSV file is empty or corrupted.")
+            return None
+
+        print(f"   [+] Report loaded successfully.")
+        if report_start_date and report_end_date:
+            print(f"       - Period: {report_start_date.date()} to {report_end_date.date()}")
+        print(f"       - Initial Positions: {len(df_initial_state)}")
+        print(f"       - Total Events: {len(df_event_log)}")
+
         return {
             'initial_state': df_initial_state,
             'events': df_event_log,
@@ -526,10 +528,10 @@ def load_ibkr_report(filepath):
         }
         
     except FileNotFoundError:
-        print(f"Error: The file was not found at '{filepath}'")
+        print(f"   [!] Error: The file was not found at '{filepath}'")
         return None
     except Exception as e:
-        print(f"A fatal error occurred during loading: {e}")
+        print(f"   [!] Fatal error loading report: {e}")
         import traceback
         traceback.print_exc()
         return None

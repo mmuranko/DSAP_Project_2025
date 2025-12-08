@@ -19,6 +19,7 @@ TARGET_CURRENCIES = CURRENCIES_365 + CURRENCIES_360
 # ==========================================
 # 2. MARGIN RATE SETTINGS
 # ==========================================
+
 # Spread added to Benchmark Rate (in Percentage Points, e.g. 1.50 = 1.5%)
 MARGIN_SPREADS = {
     'USD': 1.50,
@@ -28,52 +29,93 @@ MARGIN_SPREADS = {
     'JPY': 1.50,
     'CAD': 1.50,
     'AUD': 1.50,
+    'NOK': 1.50,
+    'SEK': 1.50,
+    'DKK': 3.00,
+    'PLN': 3.00,
+    'HKD': 2.50,
+    'ILS': 5.00,
+    'AED': 2.50,
+    'MXN': 3.00,
+    'KRW': 2.00,
+    'NZD': 1.50,
     'DEFAULT': 1.50
 }
 
 # FRED Series IDs for Benchmark Rates
 FRED_PROXIES = {
-    'USD': 'DFF',               # Fed Funds
-    'EUR': 'ECBDFR',            # ECB Deposit
+    # Majors (Daily Data usually available)
+    'USD': 'DFF',               # Fed Funds Effective Rate
+    'EUR': 'ECBDFR',            # ECB Deposit Facility Rate
     'GBP': 'IUDSOIA',           # SONIA
-    'JPY': 'IRSTCI01JPM156N',   # TONAR proxy
-    'CHF': 'IRSTCI01CHM156N',   # SARON
-    'CAD': 'IRSTCI01CAM156N',   # CORRA proxy
-    'AUD': 'RBAACTRBDAL',       # RBA Cash Rate
-    'MXN': 'IRSTCI01MXM156N',   
-    'NOK': 'IRSTCI01NOM156N',   
-    'SEK': 'IRSTCI01SEM156N',   
-    'DKK': 'IRSTCI01DKM156N',   
-    'CZK': 'IRSTCI01CZM156N',   
-    'HUF': 'IRSTCI01HUM156N',   
-    'ILS': 'IRSTCI01ILM156N',   
-    'NZD': 'IRSTCI01NZM156N',   
-    'KRW': 'IRSTCI01KRM156N',   
-    'ZAR': 'IRSTCI01ZAM156N',   
+    'JPY': 'IRSTCI01JPM156N',   # Japan Overnight Call Rate
+    'CHF': 'IRSTCI01CHM156N',   # Swiss SARON
+    'CAD': 'IRSTCI01CAM156N',   # Canada Overnight
+    'AUD': 'RBAACTRBDAL',       # RBA Cash Rate Target
+    'MXN': 'IRSTCI01MXM156N',   # Mexico Overnight
+    
+    # Developed / OECD Nations (Monthly Averages used as Daily Proxy)
+    'NOK': 'IRSTCI01NOM156N',   # Norway Interbank Rate
+    'SEK': 'IRSTCI01SEM156N',   # Sweden Interbank Rate
+    'DKK': 'IRSTCI01DKM156N',   # Denmark Interbank Rate
+    'CZK': 'IRSTCI01CZM156N',   # Czech Rep Interbank Rate
+    'HUF': 'IRSTCI01HUM156N',   # Hungary Interbank Rate
+    'ILS': 'IRSTCI01ILM156N',   # Israel Interbank Rate
+    'NZD': 'IRSTCI01NZM156N',   # New Zealand Interbank Rate
+    'KRW': 'IRSTCI01KRM156N',   # Korea Overnight
+    'ZAR': 'IRSTCI01ZAM156N',   # South Africa Interbank Rate
+    
+    # SGD is tricky on FRED (often missing). We rely on scraper + bfill for SGD if FRED fails.
     'SGD': 'IRSTCI01SGM156N',   
 }
 
 # ==========================================
 # 3. MARKET DATA MAPPINGS (Yahoo Finance)
 # ==========================================
+
 # Map Exchange Codes to Yahoo Ticker Suffixes
 EXCHANGE_SUFFIX_MAP = {
-    # Americas
-    'NASDAQ': '', 'NYSE': '', 'AMEX': '', 'ARCA': '', 'PINK': '',
-    'TSE': '.TO', 'VENTURE': '.V', 'MEXI': '.MX',
-    # Europe
-    'LSE': '.L', 'IBIS': '.DE', 'FWB': '.F', 'SBF': '.PA', 
-    'AEB': '.AS', 'EBS': '.SW', 'VIRTX': '.SW', 'BM': '.MC', 
-    'BVME': '.MI', 'SB': '.ST', 'SFB': '.ST', 'OSE': '.OL', 
-    'CPH': '.CO', 'VIE': '.VI', 'PL': '.LS', 'EBR': '.BR',
-    # Asia/Pacific
-    'SEHK': '.HK', 'ASX': '.AX', 'TSEJ': '.T', 'SGX': '.SI', 
-    'NSE': '.NS', 'BSE': '.BO'
-}
+        # --- Americas ---
+        'NASDAQ': '',     # US
+        'NYSE': '',       # US
+        'ARCA': '',       # US ETF
+        'AMEX': '',       # US
+        'PINK': '',       # US OTC
+        'TSE': '.TO',     # Toronto (Canada)
+        'VENTURE': '.V',  # TSX Venture (Canada)
+        'MEXI': '.MX',    # Mexico
+
+        # --- Europe ---
+        'LSE': '.L',      # London (UK)
+        'IBIS': '.DE',    # Xetra (Germany) - Note: IBKR uses IBIS for Xetra
+        'FWB': '.F',      # Frankfurt (Germany)
+        'SBF': '.PA',     # Euronext Paris (France)
+        'AEB': '.AS',     # Euronext Amsterdam (Netherlands)
+        'EBS': '.SW',     # SIX Swiss Exchange (Switzerland)
+        'VIRTX': '.SW',   # SIX Swiss (Blue chips)
+        'BM': '.MC',      # Bolsa de Madrid (Spain)
+        'BVME': '.MI',    # Borsa Italiana (Italy)
+        'SB': '.ST',      # Stockholm (Sweden)
+        'SFB': '.ST',     # Stockholm (Sweden)
+        'OSE': '.OL',     # Oslo (Norway)
+        'CPH': '.CO',     # Copenhagen (Denmark)
+        'VIE': '.VI',     # Vienna (Austria)
+        'PL': '.LS',      # Lisbon (Portugal)
+        'EBR': '.BR',     # Brussels (Belgium)
+
+        # --- Asia / Pacific ---
+        'SEHK': '.HK',    # Hong Kong
+        'ASX': '.AX',     # Australia
+        'TSEJ': '.T',     # Tokyo (Japan)
+        'SGX': '.SI',     # Singapore
+        'NSE': '.NS',     # India (National)
+        'BSE': '.BO',     # India (Bombay)
+    }
 
 # ==========================================
-# 4. SIMULATION: FEE SCHEDULE
+# 4. FEE SCHEDULE
 # ==========================================
+
 # 'fee': Fixed cost in Asset Currency
 # 'tax_buy': Percentage tax on PURCHASE only
 FEE_SCHEDULE = {
@@ -101,8 +143,9 @@ FEE_SCHEDULE = {
 }
 
 # ==========================================
-# 5. SIMULATION: DIVIDEND TAX RATES
+# 5. DIVIDEND TAX RATES
 # ==========================================
+
 # Withholding Tax Rates by Exchange
 DIV_TAX_RATES = {
     'NASDAQ': 0.15, 'NYSE': 0.15, 'AMEX': 0.15, 'ARCA': 0.15, 'PINK': 0.15,

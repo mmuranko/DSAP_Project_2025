@@ -1,5 +1,6 @@
 import pandas as pd
 import random
+from .config import FEE_SCHEDULE, DIV_TAX_RATES
 
 class MonteCarloEngine:
     def __init__(self, data_package, market_data_map, daily_margin_rates_df):
@@ -15,9 +16,7 @@ class MonteCarloEngine:
         self.market_data = market_data_map
         self.daily_rates = daily_margin_rates_df
         
-        self.raw_price_map = {}
         self.dividend_map = {}
-        self.split_map = {}
         
         # 2. Build Maps
         if 'Exchange' in self.financial_info.columns:
@@ -35,53 +34,15 @@ class MonteCarloEngine:
             self.original_initial_state['asset_category'] == 'Stock'
         ]['symbol'].unique().tolist()
 
-        # ==========================================
-        # CONFIG A: TRANSACTION FEE SCHEDULE
-        # ==========================================
-        self.FEE_SCHEDULE = {
-            'NASDAQ': {'fee': 1.0, 'tax_buy': 0.0},
-            'NYSE':   {'fee': 1.0, 'tax_buy': 0.0},
-            'AMEX':   {'fee': 1.0, 'tax_buy': 0.0},
-            'ARCA':   {'fee': 1.0, 'tax_buy': 0.0},
-            'PINK':   {'fee': 1.0, 'tax_buy': 0.0},
-            # CH
-            'EBS':    {'fee': 5.0, 'tax_buy': 0.0},
-            'VIRTX':  {'fee': 5.0, 'tax_buy': 0.0},
-            # Europe
-            'SBF':    {'fee': 3.0, 'tax_buy': 0.004}, # FR
-            'LSE':    {'fee': 3.0, 'tax_buy': 0.005}, # UK
-            'IBIS':   {'fee': 3.0, 'tax_buy': 0.0},   # DE
-            'FWB':    {'fee': 3.0, 'tax_buy': 0.0},   # DE
-            'AEB':    {'fee': 3.0, 'tax_buy': 0.0},   # NL
-            'BM':     {'fee': 3.0, 'tax_buy': 0.0},   # ES
-            'BVME':   {'fee': 3.0, 'tax_buy': 0.0},   # IT
-            'PL':     {'fee': 3.0, 'tax_buy': 0.0},   # PT
-            'EBR':    {'fee': 3.0, 'tax_buy': 0.0},   # BE
-            # Default
-            'DEFAULT': {'fee': 4.0, 'tax_buy': 0.0} 
-        }
-
-        # ==========================================
-        # CONFIG B: WITHHOLDING TAX SCHEDULE
-        # ==========================================
-        self.DIV_TAX_RATES = {
-            'NASDAQ': 0.15, 'NYSE': 0.15, 'AMEX': 0.15, 'ARCA': 0.15, 'PINK': 0.15,
-            'EBS': 0.35, 'VIRTX': 0.35,
-            'SBF': 0.25,
-            'IBIS': 0.26375, 'FWB': 0.26375,
-            'AEB': 0.17,
-            'BM': 0.19,
-            'BVME': 0.26,
-            'LSE': 0.00,
-            'DEFAULT': 0.15
-        }
+        # 4. Load Fee Schedule and Dividend Tax Rates
+        self.FEE_SCHEDULE = FEE_SCHEDULE
+        self.DIV_TAX_RATES = DIV_TAX_RATES
 
     def _prepare_market_data(self):
         """ Prepares price history and dividend projections. """
         sim_start = self.report_start.replace(tzinfo=None).normalize()
         sim_end = self.report_end.replace(tzinfo=None).normalize()
         
-        # Optimization: Cache for O(1) lookups
         self.price_cache = {}
 
         for ticker, df in self.market_data.items():
@@ -89,7 +50,7 @@ class MonteCarloEngine:
                 df.index = df.index.tz_localize(None)
             df.index = df.index.normalize()
 
-            # Dividends
+            # --- Dividends ---
             if 'Dividends' in df.columns:
                 raw_divs = df[df['Dividends'] != 0]['Dividends']
                 divs_in_window = raw_divs[(raw_divs.index >= sim_start) & (raw_divs.index <= sim_end)]
@@ -110,10 +71,10 @@ class MonteCarloEngine:
             else:
                 self.dividend_map[ticker] = pd.Series(dtype=float)
 
-            # Prices: We use 'Close' (which is Split-Adjusted by yfinance)
-            # This matches our Input Data (which is also Split-Adjusted by data_processor)
-            self.raw_price_map[ticker] = df['Close']
-            self.price_cache[ticker] = self.raw_price_map[ticker].to_dict()
+            # --- Prices ---
+            # TRUST THE LOADER: market_data_loader has already resampled to 'D' and ffilled.
+            # We simply load the Close column into the cache.
+            self.price_cache[ticker] = df['Close'].to_dict()
 
     def _get_fx_rate(self, from_curr, to_curr, date):
         if from_curr == to_curr: return 1.0
@@ -158,6 +119,7 @@ class MonteCarloEngine:
         if numerator <= 0: return 0
         
         denominator = price * (1 + tax_rate)
+        
         return numerator / denominator
 
     def _calculate_sell_proceeds(self, symbol, quantity, price):
@@ -197,16 +159,20 @@ class MonteCarloEngine:
         sorted_events = self.original_events.sort_values('timestamp')
         sorted_events['day'] = sorted_events['timestamp'].dt.normalize()
         grouped_events = sorted_events.groupby('day')
-        date_range = pd.date_range(self.report_start, self.report_end, freq='D')
+        # Use inclusive='left' to ensure the loop stops on the true last day,
+        # matching the logic in portfolio_reconstructor.
+        date_range = pd.date_range(self.report_start, self.report_end, freq='D', inclusive='left')
 
         for d in date_range:
             d_naive = d.replace(tzinfo=None).normalize()
             
-            # --- A. Corporate Actions ---
+            # --- A. Process Corporate Actions (Dividends) ---
+            # --- A. Simulate Corporate Actions (Dividends) ---
+            # This block runs for ALL scenarios (random and actual) to apply a normalized tax rate.
             for sym, qty in list(current_holdings.items()):
                 if abs(qty) < 1e-9: continue
                 
-                # 1. Dividends
+                # 2. Dividends
                 if sym in self.dividend_map:
                     if d_naive in self.dividend_map[sym].index:
                         div_per_share = self.dividend_map[sym].loc[d_naive]
@@ -230,21 +196,34 @@ class MonteCarloEngine:
                             })
 
             # --- B. Process Trades ---
+            # --- B. Process Events from Log ---
             if d_naive in grouped_events.groups:
                 days_events = grouped_events.get_group(d_naive)
                 
                 for _, row in days_events.iterrows():
-                    if row['event_type'] in ['DIVIDEND', 'SPLIT', 'TAX']: continue
+                    # Define events to be skipped because they are simulated (fees, interest),
+                    # or handled differently (FX trades are cash movements, splits are pre-adjusted).
+                    events_to_skip = ['DIVIDEND', 'SPLIT', 'TAX', 'INTEREST', 'FEE', 'FEE_REBATE', 'FX_TRADE']
+                    if row['event_type'] in events_to_skip:
+                        continue
                     
-                    if row['event_type'] not in ['TRADE_BUY', 'TRADE_SELL']:
+                    # Process non-trade events that are NOT skipped (e.g., DEPOSIT, WITHDRAWAL, GIFT_VEST).
+                    if row['event_type'] not in ['TRADE_BUY', 'TRADE_SELL']: 
                         timeline.append(row.to_dict())
-                        if row['currency']:
+
+                        # Update cash for events like DEPOSIT, WITHDRAWAL
+                        if row['cash_change_native'] != 0 and pd.notna(row['currency']):
                             cash_balances[row['currency']] = cash_balances.get(row['currency'], 0) + row['cash_change_native']
+                        
+                        # Update holdings for events like GIFT_VEST
+                        if row['quantity_change'] != 0 and pd.notna(row['symbol']):
+                            current_holdings[row['symbol']] = current_holdings.get(row['symbol'], 0) + row['quantity_change']
+
                         continue
                     
                     # --- TRADE LOGIC ---
-                    is_buy = (row['event_type'] == 'TRADE_BUY')
-                    orig_val = abs(row['cash_change_native'])
+                    is_buy = (row['event_type'] == 'TRADE_BUY')                    
+                    orig_val = abs(row['cash_change_native']) # The monetary value of the original trade.
                     
                     if override_trade_symbol:
                         new_sym = row['symbol']
@@ -258,12 +237,11 @@ class MonteCarloEngine:
                             new_sym = random.choice(valid_candidates)
 
                     new_curr = self.sym_curr_map.get(new_sym, self.base_currency)
-                    fx = self._get_fx_rate(row['currency'], new_curr, row['timestamp'])
+                    fx = self._get_fx_rate(row['currency'], new_curr, d_naive)
                     available_cash_new_curr = orig_val * fx
-                    raw_price = self._get_raw_price(new_sym, row['timestamp'])
+                    raw_price = self._get_raw_price(new_sym, d_naive)
                     
                     if is_buy:
-                        # Uses Corrected Math
                         new_qty = self._calculate_buy_quantity(new_sym, available_cash_new_curr, raw_price)
                         
                         if new_qty > 0:
@@ -298,9 +276,11 @@ class MonteCarloEngine:
                     cash_balances[new_curr] = cash_balances.get(new_curr, 0) + cash_impact
 
             # --- C. Interest ---
+            # --- C. Simulate Margin Interest ---
+            # This block runs for ALL scenarios to apply a normalized interest model.
             for curr, bal in cash_balances.items():
                 if bal < -0.01:
-                    rate = 0.00018
+                    rate = 0.00018 # Fallback rate
                     if curr in self.daily_rates.columns:
                         try:
                             idx_r = self.daily_rates.index.get_indexer([d_naive], method='ffill')[0]
@@ -311,8 +291,7 @@ class MonteCarloEngine:
                     cash_balances[curr] += interest
                     timeline.append({
                         'timestamp': d + pd.Timedelta(hours=23, minutes=59),
-                        'event_type': 'INTEREST_MARGIN',
-                        'symbol': curr, 'quantity_change': 0,
+                        'event_type': 'INTEREST_MARGIN', 'symbol': curr, 'quantity_change': 0,
                         'cash_change_native': interest, 'currency': curr
                     })
 

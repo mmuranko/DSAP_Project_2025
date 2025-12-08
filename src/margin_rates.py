@@ -4,42 +4,7 @@ import pandas as pd
 from dateutil.relativedelta import relativedelta
 import time
 from datetime import datetime
-
-# --- 1. USER SETTINGS (STRICT) ---
-TARGET_CURRENCIES = [
-    'AUD', 'CAD', 'GBP', 'HKD', 'KRW', 'ILS', 'INR', 'NZD', 'SGD', # 365 Day Divisor
-    'USD', 'EUR', 'CHF', 'CZK', 'JPY', 'SEK', 'NOK', 'DKK', 'MXN'  # 360 Day Divisor
-]
-
-CURRENCIES_365 = ['AUD', 'CAD', 'GBP', 'HKD', 'KRW', 'ILS', 'INR', 'NZD', 'SGD']
-
-# --- 2. FRED MAPPINGS (Expanded for Developed Nations) ---
-# Source: OECD "Immediate Rates: Less than 24 Hours: Call Money/Interbank Rate"
-FRED_PROXIES = {
-    # Majors (Daily Data usually available)
-    'USD': 'DFF',               # Fed Funds Effective Rate
-    'EUR': 'ECBDFR',            # ECB Deposit Facility Rate
-    'GBP': 'IUDSOIA',           # SONIA
-    'JPY': 'IRSTCI01JPM156N',   # Japan Overnight Call Rate
-    'CHF': 'IRSTCI01CHM156N',   # Swiss SARON
-    'CAD': 'IRSTCI01CAM156N',   # Canada Overnight
-    'AUD': 'RBAACTRBDAL',       # RBA Cash Rate Target
-    'MXN': 'IRSTCI01MXM156N',   # Mexico Overnight
-    
-    # Developed / OECD Nations (Monthly Averages used as Daily Proxy)
-    'NOK': 'IRSTCI01NOM156N',   # Norway Interbank Rate
-    'SEK': 'IRSTCI01SEM156N',   # Sweden Interbank Rate
-    'DKK': 'IRSTCI01DKM156N',   # Denmark Interbank Rate
-    'CZK': 'IRSTCI01CZM156N',   # Czech Rep Interbank Rate
-    'HUF': 'IRSTCI01HUM156N',   # Hungary Interbank Rate
-    'ILS': 'IRSTCI01ILM156N',   # Israel Interbank Rate
-    'NZD': 'IRSTCI01NZM156N',   # New Zealand Interbank Rate
-    'KRW': 'IRSTCI01KRM156N',   # Korea Overnight
-    'ZAR': 'IRSTCI01ZAM156N',   # South Africa Interbank Rate
-    
-    # SGD is tricky on FRED (often missing). We rely on scraper + bfill for SGD if FRED fails.
-    'SGD': 'IRSTCI01SGM156N',   
-}
+from .config import CURRENCIES_365, TARGET_CURRENCIES, MARGIN_SPREADS, FRED_PROXIES
 
 def get_ibkr_rates_hybrid(start_date, end_date):
     """
@@ -78,8 +43,6 @@ def get_ibkr_rates_hybrid(start_date, end_date):
     df_final = df_final.ffill()
     
     # B. Backward Fill: The "Safety Net"
-    # If SGD is missing in FRED, this takes the first scraped SGD rate 
-    # and extends it backwards to the start.
     df_final = df_final.bfill()
     
     # 4. Strict Formatting & Filtering
@@ -170,8 +133,11 @@ def get_fred_proxy_rates(start_date, end_date):
             series = series.ffill()
             
             divisor = 365.0 if currency in CURRENCIES_365 else 360.0
-            
-            daily_rate = (series + 1.50) / 100.0 / divisor
+
+            # Looks up specific currency spread, defaults to 'DEFAULT' key
+            spread = MARGIN_SPREADS.get(currency, MARGIN_SPREADS.get('DEFAULT'))
+
+            daily_rate = (series + spread) / 100.0 / divisor
             proxy_data[currency] = daily_rate
             
         except Exception:
@@ -180,13 +146,13 @@ def get_fred_proxy_rates(start_date, end_date):
             
     return proxy_data
 
-
 def parse_ibkr_rate(rate_str, currency):
     clean = rate_str.replace('%', '').replace('(', '-').replace(')', '').strip()
     if not clean or clean == '-': return None
     try:
         val = float(clean)
         divisor = 365.0 if currency in CURRENCIES_365 else 360.0
-        return (val + 1.50) / 100.0 / divisor
+        spread = MARGIN_SPREADS.get(currency, MARGIN_SPREADS.get('DEFAULT'))
+        return (val + spread) / 100.0 / divisor
     except:
         return None

@@ -27,8 +27,9 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     df_events['date'] = df_events['timestamp'].dt.normalize()
 
     # Create the master timeline (Rows for our final matrix)
-    # freq='D' ensures we have a row for EVERY day (including weekends)
-    all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+    # Use inclusive='left' to match the simulation engine's logic. This ensures
+    # the reconstruction stops on the true last day of the report.
+    all_dates = pd.date_range(start=start_date, end=end_date, freq='D', inclusive='left')
 
     # ==========================================
     # STEP 2: THE CASH ENGINE
@@ -249,6 +250,18 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     df_val_base = df_holdings * df_prices * df_rates
 
     daily_total_nav = df_val_base.sum(axis=1)
+
+    # ==========================================
+    # STEP 8: FINAL CLEANUP (Rounding)
+    # ==========================================
+    # Fixes floating point artifacts (e.g. -9.03e-13 becomes 0.0)
+    # We apply this to all output tables to ensure Excel reports are clean.
+    rounding_decimals = 5
+    
+    df_holdings = df_holdings.round(rounding_decimals)
+    df_val_native = df_val_native.round(rounding_decimals)
+    df_val_base = df_val_base.round(rounding_decimals)
+    daily_total_nav = daily_total_nav.round(rounding_decimals)
 
     # Return the essential datasets
     return {

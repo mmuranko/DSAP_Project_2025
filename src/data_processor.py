@@ -1,14 +1,10 @@
 import pandas as pd
 import numpy as np
 
-# ==========================================
-# SECTION 1: SPLIT ADJUSTMENT ENGINE
-# ==========================================
-
 def apply_split_adjustments(data_package):
     """
-    Adjusts 'initial_state' and 'events' for stock splits using vectorized 
-    cumulative products. 
+    Adjusts 'initial_state' and 'events' for retroactive events (e.g. tax adjustments) 
+    and stock splits using vectorised cumulative products. 
     
     LOGIC SUMMARY:
     Instead of iterating through events chronologically and updating a 'holding' variable,
@@ -22,50 +18,38 @@ def apply_split_adjustments(data_package):
     - Events AFTER the split have a running ratio of 4. Multiplier = 4/4 = 1 (No change).
     """
     
+    print("   [>] Applying split adjustments and event processing...")
+
     # Unpack and copy to avoid side-effects (modifying the original dict passed by reference)
     df_initial = data_package['initial_state'].copy()
     df_events = data_package['events'].copy()
     report_start = data_package['report_start_date']
 
-    # --- 0. Handle Retroactive Events (Time Travel) ---
+    # --- 0. Handle Retroactive Events ---
+
+    # Goal: Identify retroactive events that take effect in the report period 
+    # (e.g. tax adjustments) and move them to the report start date. To avoid 
+    # the symbols being included in subsequent portfolio manipulations, their 
+    # symbol is set to None.
     mask_prior = df_events['timestamp'] < report_start
     
     if mask_prior.any():
-        print(f"Processor: Moved {mask_prior.sum()} historical events to start date {report_start.date()}")
+        # Step 1: Fix the Timeline
+        print(f"       - Moved {mask_prior.sum()} historical events to start date {report_start.date()}.")
         df_events.loc[mask_prior, 'timestamp'] = report_start
 
-        # Goal: If we moved a tax event to Day 0, but we DO NOT hold the stock 
-        # and NEVER trade it, we should uncouple the event from the symbol 
-        # so it doesn't create an empty column in our portfolio matrix (cf. portfolio_reconstructor.py)
-        
-        # 1. Identify the specific rows we just moved
-        # Note: We use the mask we just created
-        moved_rows_indices = df_events[mask_prior].index
-        
-        # 2. Define the "Valid Universe" of stocks
-        # A stock is valid if it is in the Initial State...
-        initial_symbols = set(df_initial['symbol'].unique())
-        
-        # ... OR if it appears in any event that wasn't a "Time Travel" event
-        # (i.e., legitimate trades happening within the report window)
-        active_rows_mask = ~df_events.index.isin(moved_rows_indices)
-        active_symbols = set(df_events.loc[active_rows_mask, 'symbol'].dropna().unique())
-        
-        valid_universe = initial_symbols.union(active_symbols)
-        
-        # 3. Neutralize Ghosts
-        # We look at the moved rows. If their symbol is NOT in the valid universe,
-        # we set the symbol to None.
+        # Step 2: Define the Universe of "Real" Stocks
+        # A stock is valid if it is in the Initial State.
         # The Cash Engine will still see the 'cash_change', but the 
         # Securities Engine will ignore the row because the symbol is missing.
+        valid_universe = set(df_initial['symbol'].unique())
         
         ghost_mask = mask_prior & ~df_events['symbol'].isin(valid_universe)
-        
         ghost_count = ghost_mask.sum()
+        
         if ghost_count > 0:
-            print(f"Processor: Detached symbol from {ghost_count} historical tax events (Ghost Assets).")
+            print(f"       - Detached symbol from {ghost_count} historical tax events (Ghost Assets).")
             df_events.loc[ghost_mask, 'symbol'] = None
-        # ============================================================
 
     # --- 1. Prepare Event Data ---
     
@@ -79,7 +63,7 @@ def apply_split_adjustments(data_package):
     # This prepares the engine to treat each stock's timeline independently.
     grouped_ratios = df_events.groupby('symbol')['split_ratio']
     
-    # EXPLANATION: Vectorized Cumulative Product (.cumprod)
+    # EXPLANATION: Vectorised Cumulative Product (.cumprod)
     # Calculates the running product of split ratios *down* the column for each symbol.
     # Row 1 (Ratio 1.0) -> Running 1.0
     # Row 2 (Ratio 1.0) -> Running 1.0
@@ -87,7 +71,7 @@ def apply_split_adjustments(data_package):
     # Row 4 (Ratio 1.0) -> Running 4.0
     df_events['running_factor'] = grouped_ratios.cumprod()
     
-    # EXPLANATION: Vectorized Broadcast (.transform)
+    # EXPLANATION: Vectorised Broadcast (.transform)
     # .transform('prod') calculates the TOTAL product for the group (e.g., 4.0) 
     # and broadcasts that single value to EVERY row in that group.
     # This allows us to divide the "Final State" by the "Current State" in one vector operation.
@@ -97,6 +81,7 @@ def apply_split_adjustments(data_package):
     df_events['multiplier'] = df_events['total_factor'] / df_events['running_factor']
 
     # --- 2. Adjust Initial State ---
+
     if not df_initial.empty:
         # EXPLANATION: Time-Travel Masking
         # We need to know what the split factor was specifically at the moment the report started.
@@ -122,12 +107,14 @@ def apply_split_adjustments(data_package):
         df_initial['quantity'] = df_initial['quantity'] * (initial_total / initial_running)
 
     # --- 3. Adjust Event Log ---
-    # EXPLANATION: Vectorized Multiplication
+
+    # EXPLANATION: Vectorised Multiplication
     # We simply multiply the entire 'quantity_change' column by our calculated 'multiplier' column.
     # This adjusts pre-split trades (e.g., Buy 10 becomes Buy 40) while leaving post-split trades alone.
     df_events['quantity_change'] = df_events['quantity_change'] * df_events['multiplier']
 
     # --- 4. Cleanup and Restore Order ---
+
     # Remove the temporary math columns to keep the DataFrame clean
     df_events = df_events.drop(columns=['running_factor', 'total_factor', 'multiplier'])
     
@@ -137,6 +124,18 @@ def apply_split_adjustments(data_package):
     # Assign to specific variable names for clarity in return
     df_initial_state_adj = df_initial
     df_event_log_adj = df_events
+
+    # --- 5. Console Summary ---
+    
+    # Report actual splits found (High value information)
+    # We check the 'split_ratio' column to see if any non-1.0 entries exist
+    split_events = df_events[df_events['split_ratio'] != 1.0]
+    if not split_events.empty:
+        split_symbols = split_events['symbol'].unique()
+        print(f"       - Detected corporate actions/splits for: {', '.join(split_symbols)}")
+    
+    # Final Success Message
+    print(f"   [+] Processing complete. Final dataset: {len(df_events)} events.")
 
     # Return dict ensuring the structure matches the input 'data_package' exactly
     return {
