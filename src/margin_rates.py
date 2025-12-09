@@ -4,31 +4,33 @@ import pandas as pd
 from dateutil.relativedelta import relativedelta
 import time
 from datetime import datetime
+import io
 from .config import CURRENCIES_365, TARGET_CURRENCIES, MARGIN_SPREADS, FRED_PROXIES
 
 def get_ibkr_rates_hybrid(start_date, end_date):
     """
     Returns margin rates strictly for TARGET_CURRENCIES.
     1. Scrapes IBKR (Recent).
-    2. Backfills using FRED/OECD data (Deep History).
+    2. Backfills using FRED data (Deep History).
     3. Backfills remaining gaps using the last known rate.
     """
-    print(f"--- Fetching Margin Rates ({start_date.date()} to {end_date.date()}) ---")
+    print(f"   [>] Fetching Margin Rates ({start_date.date()} to {end_date.date()})...")
+    time.sleep(0.5)
     
     # 1. Scrape Recent Data
     df_scraped = get_daily_margin_rates_scraper(start_date, end_date)
     
     if df_scraped.empty:
         min_scraped_date = end_date 
+        print("       [!] Warning: IBKR Scraper returned no data. Switching to full FRED backfill.")
     else:
         min_scraped_date = df_scraped.index.min()
-    
-    print(f"Scraper returned data from: {min_scraped_date.date()}")
+        print(f"       - Scraper returned data from: {min_scraped_date.date()}")
 
     # 2. Backfill Deep History with FRED
     if min_scraped_date > start_date:
         backfill_end = min_scraped_date - pd.Timedelta(days=1)
-        print(f"Backfilling history from {start_date.date()} to {backfill_end.date()} using FRED...")
+        print(f"       - Backfilling history from {start_date.date()} to {backfill_end.date()} using FRED...")
         df_backfill = get_fred_proxy_rates(start_date, backfill_end)
         
         # Combine: Priority to Scraped Data, then FRED
@@ -48,6 +50,10 @@ def get_ibkr_rates_hybrid(start_date, end_date):
     # 4. Strict Formatting & Filtering
     df_final = df_final.reindex(columns=TARGET_CURRENCIES)
     
+    print(f"   [+] Margin rates loaded successfully.")
+    print()
+    time.sleep(0.5)
+
     return df_final.loc[start_date:end_date]
 
 
@@ -68,10 +74,23 @@ def get_daily_margin_rates_scraper(start_date, end_date):
         if month_str > datetime.now().strftime("%Y%m"): continue
 
         url = f"{base_url}?date={month_str}&ib_entity=llc"
+        # Retry Logic
+        resp = None
+        for attempt in range(3): # Try up to 3 times
+            try:
+                resp = requests.get(url, headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    break
+            except requests.exceptions.RequestException:
+                # Wait 1s, 2s, etc. before retrying
+                time.sleep(1 + attempt)
+        
+        # If resp is still None or failed after 3 tries, skip this month
+        if resp is None or resp.status_code != 200:
+            print(f"       [!] Warning: Failed to fetch margin data for {month_str}")
+            continue
+
         try:
-            resp = requests.get(url, headers=headers, timeout=5)
-            if resp.status_code != 200: continue
-            
             soup = BeautifulSoup(resp.text, "html.parser")
             table = soup.find('table', class_='table table-freeze-col table-bordered table-striped')
             if not table: continue 
@@ -102,8 +121,9 @@ def get_daily_margin_rates_scraper(start_date, end_date):
                         if rate is not None:
                             all_data.append({'date': pd.to_datetime(date_str), 'currency': curr, 'rate': rate})
             
-        except Exception:
-            continue 
+        except Exception as e:
+            print(f"       [!] Warning: Error parsing HTML for {month_str}: {e}")
+            continue
             
     if not all_data: return pd.DataFrame()
     
@@ -123,7 +143,24 @@ def get_fred_proxy_rates(start_date, end_date):
         
         try:
             url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={fred_code}"
-            series_df = pd.read_csv(url, index_col=0, parse_dates=True, na_values='.')
+            
+            # Retry Logic
+            r = None
+            for attempt in range(3): # Try up to 3 times
+                try:
+                    r = requests.get(url, timeout=10)
+                    if r.status_code == 200:
+                        break 
+                except requests.exceptions.RequestException:
+                    # Wait 1s, 2s, etc. before retrying
+                    time.sleep(1 + attempt)
+
+            # If resp is still None or failed after 3 tries, skip this month
+            if r is None or r.status_code != 200:
+                print(f"       [!] Warning: Failed to fetch FRED data for {currency}")
+                continue
+
+            series_df = pd.read_csv(io.StringIO(r.text), index_col=0, parse_dates=True, na_values='.')
             
             # Align to our dates
             series = series_df.reindex(proxy_data.index)
@@ -140,10 +177,10 @@ def get_fred_proxy_rates(start_date, end_date):
             daily_rate = (series + spread) / 100.0 / divisor
             proxy_data[currency] = daily_rate
             
-        except Exception:
-            # If download fails, column stays NaN, will be caught by bfill later
-            continue 
-            
+        except Exception as e:
+            print(f"       [!] Warning: Error processing FRED data for {currency}: {e}")
+            continue
+
     return proxy_data
 
 def parse_ibkr_rate(rate_str, currency):

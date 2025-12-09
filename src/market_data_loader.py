@@ -50,11 +50,12 @@ def load_market_data(data_package, report_filename=None):
     unique_tickers = list(set(symbol_to_ticker.values()))
     
     if unique_tickers:
-        print(f"   [>] Downloading {len(unique_tickers)} tickers sequentially (Fresh Download)...")
+        print(f"   [>] Downloading {len(unique_tickers)} tickers sequentially...")
+        time.sleep(0.5)
         
         for i, ticker in enumerate(unique_tickers):
             
-            # --- RETRY LOGIC ---
+            # Retry logic
             max_retries = 3 
             success = False
             
@@ -130,5 +131,10 @@ def load_market_data(data_package, report_filename=None):
             # Polite wait between tickers
             if success:
                 time.sleep(0.5)
+
+    if unique_tickers:
+        print(f"   [+] Market data download complete.")
+        print()
+        time.sleep(0.1)
 
     return market_data_map

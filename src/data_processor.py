@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import time
 
 def apply_split_adjustments(data_package):
     """
@@ -19,6 +20,7 @@ def apply_split_adjustments(data_package):
     """
     
     print("   [>] Applying split adjustments and event processing...")
+    time.sleep(0.5)
 
     # Unpack and copy to avoid side-effects (modifying the original dict passed by reference)
     df_initial = data_package['initial_state'].copy()
@@ -136,6 +138,8 @@ def apply_split_adjustments(data_package):
     
     # Final Success Message
     print(f"   [+] Processing complete. Final dataset: {len(df_events)} events.")
+    print()
+    time.sleep(0.5)
 
     # Return dict ensuring the structure matches the input 'data_package' exactly
     return {

@@ -1,5 +1,6 @@
 import pandas as pd
 import re
+import time
 from datetime import datetime
 
 # ==========================================
@@ -397,6 +398,7 @@ def load_ibkr_report(filepath):
     """
 
     print(f"   [>] Reading IBKR report: {filepath}")
+    time.sleep(0.5)
 
     try:
         # Robust CSV Loading: 
@@ -512,11 +514,13 @@ def load_ibkr_report(filepath):
             print("       Check if the CSV file is empty or corrupted.")
             return None
 
-        print(f"   [+] Report loaded successfully.")
         if report_start_date and report_end_date:
             print(f"       - Period: {report_start_date.date()} to {report_end_date.date()}")
         print(f"       - Initial Positions: {len(df_initial_state)}")
         print(f"       - Total Events: {len(df_event_log)}")
+        print(f"   [+] Report loaded successfully.")
+        print()
+        time.sleep(0.5)
 
         return {
             'initial_state': df_initial_state,

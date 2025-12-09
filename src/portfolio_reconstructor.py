@@ -1,5 +1,5 @@
 import pandas as pd
-import numpy as np
+import time
 
 def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     """
@@ -10,6 +10,10 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     2. Linear Algebra Valuation: Matrix multiplication (Holdings * Prices * Rates).
     3. Robust Gap Filling: Uses ffill+bfill for missing market data.
     """
+
+    if verbose:
+        print("   [>] Reconstructing Portfolio History...")
+        time.sleep(0.5)
 
     # ==========================================
     # STEP 1: UNPACK & SETUP
@@ -22,7 +26,6 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     end_date = data_package['report_end_date'].normalize()
 
     # We create a NEW column called 'date'. 
-    # This does NOT delete the 'timestamp' info. It just gives us a "Day ID" for grouping.
     # Example: "2025-02-14 10:45:03" becomes "2025-02-14 00:00:00"
     df_events['date'] = df_events['timestamp'].dt.normalize()
 
@@ -87,7 +90,7 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     initial_stocks = df_initial[df_initial['asset_category'] == 'Stock']
     
     if verbose:
-        print(f"Found {len(initial_stocks)} initial stock positions.")
+        print(f"       - Found {len(initial_stocks)} initial stock positions.")
 
     for _, row in initial_stocks.iterrows():
         sym = row['symbol']
@@ -108,11 +111,11 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     # (This usually implies a missing initial position or bad split logic)
     negatives = df_daily_security_balance[df_daily_security_balance < -1e-9].count().sum()
     if negatives > 0 and verbose:
-        print(f"\nWARNING: Found {negatives} instances of negative share counts!")
+        print(f"       [!] WARNING: Found {negatives} instances of negative share counts!")
         # detailed check
         for col in df_daily_security_balance.columns:
             if (df_daily_security_balance[col] < -1e-9).any():
-                print(f"   - {col} goes negative.")
+                print(f"           - {col} goes negative.")
 
     # ==========================================
     # STEP 4: MERGE HOLDINGS
@@ -125,7 +128,7 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
 
     if not cols_overlap.empty:
         if verbose:
-            print(f"Cleaning up redundant currency columns in Security Engine: {list(cols_overlap)}")
+            print(f"       - Cleaning up redundant currency columns: {list(cols_overlap)}")
         # Drop them from the Security DataFrame so they don't duplicate the Cash DataFrame columns
         df_security_clean = df_daily_security_balance.drop(columns=cols_overlap)
     else:
@@ -176,7 +179,11 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
             
             # Assign to Matrix
             df_prices[col] = aligned_prices
-
+        else:
+            # ERROR: Stock exists in portfolio but no market data found.
+            # It will remain valued at 1.0, which is incorrect.
+            if verbose:
+                print(f"       [!] WARNING: No market data for '{col}'. Valuing at 1.0 (Potential risk).")
 
     # ==========================================
     # STEP 6: CONSTRUCT EXCHANGE RATE MATRIX
@@ -197,7 +204,7 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     
         if asset_curr is None:
             if verbose:
-                print(f"CRITICAL WARNING: Asset '{col}' appeared in holdings but was not in Initial State map! Defaulting to {base_currency}.")
+                print(f"       [!] CRITICAL WARNING: Asset '{col}' missing from Initial State map! Defaulting to {base_currency}.")
             asset_curr = base_currency
         
         # B. Skip if no conversion needed
@@ -231,7 +238,7 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
             df_rates[col] = aligned_rate
         else:
             if verbose:
-                print(f"Warning: No FX rate found for {asset_curr} (Asset: {col})")
+                print(f"       [!] Warning: No FX rate found for {asset_curr} (Asset: {col})")
 
     # ==========================================
     # STEP 7: THE CALCULATION (Matrix Multiplication)
@@ -263,7 +270,18 @@ def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     df_val_base = df_val_base.round(rounding_decimals)
     daily_total_nav = daily_total_nav.round(rounding_decimals)
 
-    # Return the essential datasets
+    # --- 9. Final Sanity Check ---
+    if daily_total_nav.isnull().any():
+        if verbose:
+            print(f"       [!] CRITICAL: Calculated NAV contains NaNs (Check FX rates or missing dates).")
+            # Fill NaNs to prevent downstream crashes
+            daily_total_nav = daily_total_nav.fillna(0)
+
+    if verbose:
+        print(f"   [+] Portfolio reconstruction complete.")
+        print()
+        time.sleep(0.5)
+
     return {
         'holdings': df_holdings,
         'prices': df_prices,

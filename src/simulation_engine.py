@@ -1,5 +1,6 @@
 import pandas as pd
 import random
+import time
 from .config import FEE_SCHEDULE, DIV_TAX_RATES
 
 class MonteCarloEngine:
@@ -34,7 +35,7 @@ class MonteCarloEngine:
             self.original_initial_state['asset_category'] == 'Stock'
         ]['symbol'].unique().tolist()
 
-        # 4. Load Fee Schedule and Dividend Tax Rates
+        # 5. Load Fee Schedule and Dividend Tax Rates
         self.FEE_SCHEDULE = FEE_SCHEDULE
         self.DIV_TAX_RATES = DIV_TAX_RATES
 
@@ -63,7 +64,9 @@ class MonteCarloEngine:
                     if not past_divs.empty:
                         projected_dates = past_divs.index + pd.Timedelta(days=365)
                         projected_divs = pd.Series(past_divs.values, index=projected_dates)
-                        self.dividend_map[ticker] = pd.concat([raw_divs, projected_divs]).sort_index()
+                        combined_divs = pd.concat([raw_divs, projected_divs]).sort_index()
+                        combined_divs.index = combined_divs.index.normalize()
+                        self.dividend_map[ticker] = combined_divs
                     else:
                         self.dividend_map[ticker] = raw_divs
                 else:
@@ -72,7 +75,7 @@ class MonteCarloEngine:
                 self.dividend_map[ticker] = pd.Series(dtype=float)
 
             # --- Prices ---
-            # TRUST THE LOADER: market_data_loader has already resampled to 'D' and ffilled.
+            # market_data_loader has already resampled to 'D' and ffilled.
             # We simply load the Close column into the cache.
             self.price_cache[ticker] = df['Close'].to_dict()
 
@@ -129,22 +132,6 @@ class MonteCarloEngine:
         net_val = gross_val - rule['fee']
         return max(0.0, net_val)
 
-    def generate_scenario(self, num_paths=100):
-        results = []
-        print(f"Generating {num_paths} Tax & Fee-Aware paths...")
-        for i in range(num_paths):
-            sim_events = self._run_single_path()
-            sim_package = {
-                'initial_state': self.original_initial_state.copy(),
-                'events': sim_events,
-                'report_start_date': self.report_start,
-                'report_end_date': self.report_end,
-                'base_currency': self.base_currency,
-                'financial_info': self.financial_info 
-            }
-            results.append(sim_package)
-        return results
-
     def _run_single_path(self, override_trade_symbol=False):
         cash_balances = {}
         current_holdings = {}
@@ -163,16 +150,17 @@ class MonteCarloEngine:
         # matching the logic in portfolio_reconstructor.
         date_range = pd.date_range(self.report_start, self.report_end, freq='D', inclusive='left')
 
+        # Define skip list once (Optimization & Consistency)
+        events_to_skip = {'DIVIDEND', 'SPLIT', 'TAX', 'INTEREST', 'FEE', 'FEE_REBATE', 'FX_TRADE'}
+
         for d in date_range:
             d_naive = d.replace(tzinfo=None).normalize()
             
-            # --- A. Process Corporate Actions (Dividends) ---
-            # --- A. Simulate Corporate Actions (Dividends) ---
+            # --- A. Simulate Dividends ---
             # This block runs for ALL scenarios (random and actual) to apply a normalized tax rate.
             for sym, qty in list(current_holdings.items()):
                 if abs(qty) < 1e-9: continue
                 
-                # 2. Dividends
                 if sym in self.dividend_map:
                     if d_naive in self.dividend_map[sym].index:
                         div_per_share = self.dividend_map[sym].loc[d_naive]
@@ -195,15 +183,12 @@ class MonteCarloEngine:
                                 'quantity_change': 0, 'cash_change_native': -tax_amount, 'currency': curr
                             })
 
-            # --- B. Process Trades ---
-            # --- B. Process Events from Log ---
+            # --- B. Simulate Trades ---
             if d_naive in grouped_events.groups:
                 days_events = grouped_events.get_group(d_naive)
                 
                 for _, row in days_events.iterrows():
-                    # Define events to be skipped because they are simulated (fees, interest),
-                    # or handled differently (FX trades are cash movements, splits are pre-adjusted).
-                    events_to_skip = ['DIVIDEND', 'SPLIT', 'TAX', 'INTEREST', 'FEE', 'FEE_REBATE', 'FX_TRADE']
+                    # Use the pre-defined set for faster lookup
                     if row['event_type'] in events_to_skip:
                         continue
                     
@@ -275,7 +260,6 @@ class MonteCarloEngine:
                     current_holdings[new_sym] = current_holdings.get(new_sym, 0) + new_qty
                     cash_balances[new_curr] = cash_balances.get(new_curr, 0) + cash_impact
 
-            # --- C. Interest ---
             # --- C. Simulate Margin Interest ---
             # This block runs for ALL scenarios to apply a normalized interest model.
             for curr, bal in cash_balances.items():
@@ -296,11 +280,42 @@ class MonteCarloEngine:
                     })
 
         return pd.DataFrame(timeline)
+    
+    def generate_scenario(self, num_paths=100, verbose=False):
+
+        results = []
+        if verbose:
+            print(f"   [>] Generating {num_paths} simulated paths...")
+            time.sleep(0.5)
+
+        for i in range(num_paths):
+            sim_events = self._run_single_path()
+            sim_package = {
+                'initial_state': self.original_initial_state.copy(),
+                'events': sim_events,
+                'report_start_date': self.report_start,
+                'report_end_date': self.report_end,
+                'base_currency': self.base_currency,
+                'financial_info': self.financial_info 
+            }
+            results.append(sim_package)
+        if verbose:
+            print(f"   [+] Batch of {num_paths} paths generated.")
+            time.sleep(0.5)
+
+        return results
 
     def run_actual_with_sim_logic(self):
         """ Runs the actual historical trades through the simulation engine. """
-        print("Generating 'Shadow' Actual Portfolio (Fee-Normalized)...")
+
+        print("   [>] Generating Shadow Benchmark (Fee-Normalized)...")
+        time.sleep(0.5)
+
         sim_events = self._run_single_path(override_trade_symbol=True)
+
+        print("   [+] Shadow Benchmark generated.")
+        time.sleep(0.5)
+
         return [ {
             'initial_state': self.original_initial_state.copy(),
             'events': sim_events,
