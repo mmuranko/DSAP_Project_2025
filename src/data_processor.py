@@ -1,5 +1,3 @@
-import pandas as pd
-import numpy as np
 import time
 
 def apply_split_adjustments(data_package):

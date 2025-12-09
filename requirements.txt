@@ -1,7 +1,11 @@
 pandas
+numpy
 yfinance
 python-dateutil
 openpyxl
 matplotlib
 seaborn
 scipy
+requests
+beautifulsoup4
+jinja2
