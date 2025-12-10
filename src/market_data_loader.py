@@ -1,17 +1,36 @@
+"""
+Market Data Loader Module.
+
+Handles ticker construction, sequential data retrieval via yfinance, and
+time-series normalization for portfolio assets.
+"""
 import pandas as pd
 import yfinance as yf
 import time
+from typing import Any, Optional
 from .config import EXCHANGE_SUFFIX_MAP
 
-def load_market_data(data_package, report_filename=None):
+def load_market_data(data_package: dict[str, Any], report_filename: Optional[str] = None) -> dict[str, pd.DataFrame]:
     """
-    Accepts a data package, constructs ticker symbols, and downloads daily market data.
-    Uses yfinance's internal session management (curl_cffi).
+    Constructs tickers and downloads daily market data for all portfolio assets.
+
+    Maps internal symbols to provider tickers (e.g., adding '.L' for LSE), handles
+    currency cross-rates for cash positions, and normalizes GBp/GBP pricing.
+    Data is gap-filled to ensure a continuous daily index.
+
+    Args:
+        data_package: Dict containing 'initial_state', 'financial_info',
+                      'base_currency', and report dates.
+        report_filename: Optional report identifier (unused).
+
+    Returns:
+        Dict mapping internal symbols (or cash tickers) to cleaned DataFrames
+        containing OHLCV and Dividend history.
     """
-    
     # ======================================================
     # 1. PREPARE TICKERS
     # ======================================================
+    # Extract core configuration and portfolio state from the provided package.
     df_initial_state_adj = data_package['initial_state'].copy()
     df_financial_info = data_package['financial_info']
     base_currency = data_package['base_currency']
@@ -21,19 +40,24 @@ def load_market_data(data_package, report_filename=None):
     symbol_to_ticker = {}
 
     # A. Stocks
+    # Identify equity assets and map internal symbols to vendor-specific tickers.
     stocks_mask = df_initial_state_adj['asset_category'] == 'Stock'
     stock_symbols = df_initial_state_adj.loc[stocks_mask, 'symbol'].unique()
 
     for sym in stock_symbols:
+        # Retrieve the exchange code to determine the correct suffix (e.g., '.L', '.TO').
         exchange_entry = df_financial_info.loc[df_financial_info['symbol'] == sym, 'Exchange']
         if not exchange_entry.empty:
             exchange_code = exchange_entry.iloc[0]
             suffix = EXCHANGE_SUFFIX_MAP.get(exchange_code, '')
             symbol_to_ticker[sym] = f"{sym}{suffix}"
         else:
+            # Default to the raw symbol if no exchange mapping exists.
             symbol_to_ticker[sym] = sym
 
     # B. Cash
+    # Construct Forex tickers for non-base currency cash positions to facilitate 
+    # cross-rate calculations.
     cash_mask = df_initial_state_adj['asset_category'] == 'Cash'
     cash_symbols = df_initial_state_adj.loc[cash_mask, 'symbol'].unique()
     for sym in cash_symbols:
@@ -41,8 +65,9 @@ def load_market_data(data_package, report_filename=None):
         symbol_to_ticker[sym] = f"{sym}{base_currency}=X"
 
     # ======================================================
-    # 2. SEQUENTIAL DOWNLOAD (Robust Mode)
+    # 2. SEQUENTIAL DOWNLOAD
     # ======================================================
+    # Define a lookback window of 5 years to ensure sufficient history for further analyses
     start_dt = report_start_date - pd.DateOffset(years=5)
     end_dt = report_end_date
     
@@ -55,60 +80,64 @@ def load_market_data(data_package, report_filename=None):
         
         for i, ticker in enumerate(unique_tickers):
             
-            # Retry logic
+            # Implement a retry mechanism with exponential backoff to handle transient network errors.
             max_retries = 3 
             success = False
             
             for attempt in range(max_retries):
                 try:
-                    # yfinance internal session handling
+                    # Instantiate the Ticker object (uses internal session handling).
                     dat = yf.Ticker(ticker)
                     
+                    # Fetch historical price and dividend data.
                     df = dat.history(start=start_dt, end=end_dt, auto_adjust=False, actions=True)
                     
                     df = df.dropna(how='all')
                     if df.empty:
-                        # Allow retry on empty data
+                        # Differentiate between a temporary failure and a permanent lack of data.
                         if attempt < max_retries - 1:
                             raise ValueError("Received empty data")
                         else:
                             print(f"       [{i+1}/{len(unique_tickers)}] {ticker} NO DATA returned.")
                             break
 
+                    # Flatten MultiIndex columns if the provider returns grouped data.  
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(1)
                     
                     df = df.copy()
 
-                    # Remove timezone (make it 'naive') & Normalize to midnight
+                    # Remove timezone information and normalize to midnight
                     df.index = df.index.tz_localize(None).normalize()
                     
                     # GBp to GBP Fix
+                    # London Stock Exchange stocks often quote in Pence (GBp) while portfolios report in Pounds (GBP).
                     if ticker.endswith('.L'):
                         divisor = 1.0
                         
-                        # 1. Check Metadata (Source of Truth)
+                        # 1. Check Metadata (Primary Method)
                         try:
                             # 'GBp' = Pence, 'GBP' = Pounds
-                            # fast_info is efficient and reliable
+                            # Query the fast_info attribute for the currency string.
                             currency = dat.fast_info['currency']
                             if currency == 'GBp':
                                 divisor = 100.0
                         except:
-                            # 2. Fallback Heuristic (Only if metadata fails)
-                            # Assume > 500 is likely pence (e.g. 500p = £5)
-                            if df['Close'].mean() > 500:
+                            # 2. Fallback Heuristic (Secondary Method)
+                            # If metadata is unavailable, assume prices > 1000 indicate Pence.
+                            if df['Close'].mean() > 1000:
                                 divisor = 100.0
                         
-                        # Apply Correction
+                        # Apply the divisor to all monetary columns if scaling is required.
                         if divisor > 1.0:
                             cols = [c for c in ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Dividends'] if c in df.columns]
                             df[cols] = df[cols] / divisor
 
-                    # Gap Fill (Weekends/Holidays)
+                    # Fill temporal gaps (weekends, holidays) using forward-fill to maintain a continuous daily time series.
                     df = df.resample('D').ffill().bfill()
 
-                    # Save to Map
+                    # Save the processed DataFrame to the map.
+                    # Note: Multiple internal symbols (e.g., specific lots) may map to the same ticker.
                     symbols = [k for k, v in symbol_to_ticker.items() if v == ticker]
                     for sym in symbols:
                         if '=X' in ticker:
@@ -118,9 +147,10 @@ def load_market_data(data_package, report_filename=None):
                     
                     print(f"       [{i+1}/{len(unique_tickers)}] {ticker} success.")
                     success = True
-                    break # Success, exit retry loop
+                    break # Exit the retry loop upon success.
 
                 except Exception as e:
+                    # Calculate exponential backoff wait time (5s, 10s, 20s).
                     wait_time = 5 * (2 ** attempt) # 5s, 10s...
                     if attempt < max_retries - 1:
                         print(f"       [!] Issue with {ticker} ({e}). Retrying in {wait_time}s...")
@@ -128,7 +158,7 @@ def load_market_data(data_package, report_filename=None):
                     else:
                         print(f"       [!] Failed {ticker}: {e}")
 
-            # Polite wait between tickers
+            # Introduce a delay between requests to respect API limits.
             if success:
                 time.sleep(0.5)
 

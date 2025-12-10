@@ -1,4 +1,5 @@
 import time
+from typing import Callable
 
 def apply_split_adjustments(data_package):
     """

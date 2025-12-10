@@ -1,6 +1,7 @@
 import pandas as pd
 import re
 import time
+from typing import Callable
 
 # ==========================================
 # SECTION 1: GENERIC UTILITIES

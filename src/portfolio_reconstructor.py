@@ -1,5 +1,6 @@
 import pandas as pd
 import time
+from typing import Callable
 
 def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
     """

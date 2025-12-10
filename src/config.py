@@ -1,6 +1,12 @@
 # config.py
 
 # ==========================================
+# 0. CURRENCY SETTINGS
+# ==========================================
+
+RISK_FREE_RATE = 0.02
+
+# ==========================================
 # 1. CURRENCY SETTINGS
 # ==========================================
 # Currencies using Actual/365 day count convention

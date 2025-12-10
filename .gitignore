@@ -1,35 +1,5 @@
 # ==========================================
-# DATA SCIENCE & FINANCE PROJECT SPECIFIC
-# ==========================================
-
-# Raw Data & Databases (NEVER Commit)
-data/
-datasets/
-*.csv
-*.xlsx
-*.xls
-*.parquet
-*.sqlite
-db.sqlite3
-db.sqlite3-journal
-
-# Trained Models & Large Binaries
-models/
-*.pkl
-*.joblib
-*.h5
-*.hdf5
-*.pt
-*.pth
-*.onnx
-
-# Generated Outputs
-outputs/
-reports/
-figures/
-
-# ==========================================
-# PYTHON STANDARD
+# PYTHON STANDARD (Boilerplate)
 # ==========================================
 
 # Byte-compiled / optimized / DLL files
@@ -98,7 +68,6 @@ env.bak/
 venv.bak/
 
 # Secrets (CRITICAL)
-# Ensure .env contains your API keys and is NEVER committed
 *.env
 
 # ==========================================
@@ -109,10 +78,9 @@ venv.bak/
 .ipynb_checkpoints
 profile_default/
 ipython_config.py
-# Specific temporary analysis file
 analysis.ipynb
 
-# IDE Settings (VS Code, PyCharm, etc.)
+# IDE Settings
 .vscode/
 .idea/
 .spyderproject
@@ -130,13 +98,13 @@ analysis.ipynb
 ehthumbs.db
 Thumbs.db
 
-# Package Managers (Locks usually committed, but local configs ignored)
+# Package Managers 
 .pdm-python
 .pdm-build/
 .pixi/
 __pypackages__/
 
-# Web Frameworks (Django/Flask/etc)
+# Web Frameworks
 instance/
 .webassets-cache
 *.log
@@ -149,3 +117,45 @@ dmypy.json
 .pyre/
 .pytype/
 .ruff_cache/
+
+# ==========================================
+# GENERAL DATA TYPES (Global Ignores)
+# ==========================================
+
+# Large Data & Excel
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.sqlite
+db.sqlite3
+db.sqlite3-journal
+
+# Models & Binaries
+*.pkl
+*.joblib
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.onnx
+
+# Generated Outputs
+outputs/
+reports/
+figures/
+
+# ==========================================
+# PROJECT SPECIFIC EXCEPTIONS (The Final Say)
+# ==========================================
+
+# 1. Ignore everything in data/ by default...
+data/*
+
+# 2. ...BUT allow the placeholder (so the folder exists on GitHub)
+!data/.gitkeep
+
+# 3. ...AND allow the specific checkpoint file
+# (Must come AFTER *.pkl rule above to override it)
+!data/checkpoints/
+!data/checkpoints/simulation_artifact.pkl

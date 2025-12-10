@@ -5,6 +5,7 @@ from dateutil.relativedelta import relativedelta
 import time
 from datetime import datetime
 import io
+from typing import Callable
 from .config import CURRENCIES_365, TARGET_CURRENCIES, MARGIN_SPREADS, FRED_PROXIES
 
 def get_ibkr_rates_hybrid(start_date, end_date):
