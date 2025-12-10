@@ -294,9 +294,14 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
 
     for section_name, event_type in [('Dividends', 'DIVIDEND'), ('Withholding Tax', 'TAX')]:
         df_section = get_section(df_raw, section_name)
-        if df_section is not None:
+        if df_section is not None and not df_section.empty:
             df_section['Amount'] = pd.to_numeric(df_section['Amount'], errors='coerce').fillna(0)
-            df_section['Date'] = pd.to_datetime(df_section['Date'], format='%d/%m/%Y')
+            first_date = str(df_section['Date'].iloc[0])
+
+            if '-' in first_date:
+                df_section['Date'] = pd.to_datetime(df_section['Date'], format='%Y-%m-%d')
+            else:
+                df_section['Date'] = pd.to_datetime(df_section['Date'], format='%d/%m/%Y')
             df_section = df_section.dropna(subset=['Date'])
             
             # Vectorized Regex Extraction: .str.extract() applies regex to the entire column
@@ -318,9 +323,14 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
 
     # --- C. Interest ---
     df_interest = get_section(df_raw, 'Interest')
-    if df_interest is not None:
+    if df_interest is not None and not df_interest.empty:
         df_interest['Amount'] = pd.to_numeric(df_interest['Amount'], errors='coerce').fillna(0)
-        df_interest['Date'] = pd.to_datetime(df_interest['Date'], format='%d/%m/%Y')
+
+        first_date = str(df_interest['Date'].iloc[0])
+        if '-' in first_date:
+            df_interest['Date'] = pd.to_datetime(df_interest['Date'], format='%Y-%m-%d')
+        else:
+            df_interest['Date'] = pd.to_datetime(df_interest['Date'], format='%d/%m/%Y')
         df_interest = df_interest.dropna(subset=['Date'])
             
         for _, row in df_interest.iterrows():
@@ -336,9 +346,14 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
     # --- D. Fees (General & Transaction) ---
     # 1. General Fees
     df_fees = get_section(df_raw, 'Fees')
-    if df_fees is not None:
+    if df_fees is not None and not df_fees.empty:
         df_fees['Amount'] = pd.to_numeric(df_fees['Amount'], errors='coerce').fillna(0)
-        df_fees['Date'] = pd.to_datetime(df_fees['Date'], format='%d/%m/%Y', errors='coerce')
+
+        first_date = str(df_fees['Date'].iloc[0])
+        if '-' in first_date:
+            df_fees['Date'] = pd.to_datetime(df_fees['Date'], format='%Y-%m-%d', errors='coerce')
+        else:
+            df_fees['Date'] = pd.to_datetime(df_fees['Date'], format='%d/%m/%Y', errors='coerce')
         df_fees = df_fees.dropna(subset=['Date'])
 
         for _, row in df_fees.iterrows():
@@ -372,10 +387,14 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
 
     # --- E. Deposits & Withdrawals ---
     df_deposits = get_section(df_raw, 'Deposits & Withdrawals')
-    if df_deposits is not None:
+    if df_deposits is not None and not df_deposits.empty:
         df_deposits['Amount'] = clean_number(df_deposits['Amount'])
         
-        df_deposits['Settle Date'] = pd.to_datetime(df_deposits['Settle Date'], format='%d/%m/%Y')
+        first_date = str(df_deposits['Settle Date'].iloc[0])
+        if '-' in first_date:
+            df_deposits['Settle Date'] = pd.to_datetime(df_deposits['Settle Date'], format='%Y-%m-%d')
+        else:
+            df_deposits['Settle Date'] = pd.to_datetime(df_deposits['Settle Date'], format='%d/%m/%Y')
         df_deposits = df_deposits.dropna(subset=['Settle Date'])
 
         for _, row in df_deposits.iterrows():
@@ -491,15 +510,22 @@ def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
     time.sleep(0.5)
 
     try:
-        # Robust CSV Loading: 
-        # - header=None: IBKR files are stacked tables, so there is no single header row.
-        # - on_bad_lines='skip': Prevents the parser from crashing on malformed lines.
-        # - low_memory=False: Reads the full file to memory to accurately infer data types.
+        # FIX: Add 'names' to force a wide schema and prevent skipping wide rows.
+        # FIX: Change encoding to 'utf-8-sig' to handle potential BOM characters safely.
         df_raw = pd.read_csv(
-            filepath, header=None, dtype=object, 
-            on_bad_lines='skip', low_memory=False
+            filepath, 
+            header=None, 
+            names=list(range(100)), # Create 0..99 columns to fit widest rows
+            dtype=object, 
+            on_bad_lines='skip', 
+            low_memory=False,
+            encoding='utf-8-sig'    # Handle BOM (Byte Order Mark) often found in financial CSVs
         )
-        
+
+        # Recommended: Strip whitespace from the Section Name column (Column 0)
+        # to ensure strictly equal matches like df_raw[0] == 'Trades' work.
+        df_raw[0] = df_raw[0].str.strip()
+
         report_start_date, report_end_date = None, None
         base_currency = 'CHF' 
         
