@@ -57,7 +57,7 @@ FRED_PROXIES = {
     'JPY': 'IRSTCI01JPM156N',   # Japan Overnight Call Rate
     'CHF': 'IRSTCI01CHM156N',   # Swiss SARON
     'CAD': 'IRSTCI01CAM156N',   # Canada Overnight
-    'AUD': 'RBAACTRBDAL',       # RBA Cash Rate Target
+    'AUD': 'IRSTCI01AUM156N',   # Immediate Rates: Call Money/Interbank Rate for Australia
     'MXN': 'IRSTCI01MXM156N',   # Mexico Overnight
     
     # Developed / OECD Nations (Monthly Averages used as Daily Proxy)
@@ -71,8 +71,8 @@ FRED_PROXIES = {
     'KRW': 'IRSTCI01KRM156N',   # Korea Overnight
     'ZAR': 'IRSTCI01ZAM156N',   # South Africa Interbank Rate
     
-    # SGD is tricky on FRED (often missing). We rely on scraper + bfill for SGD if FRED fails.
-    'SGD': 'IRSTCI01SGM156N',   
+    # SGD data cannot be reliably obtained. Singapore rates track US rates closely due to MAS exchange rate management
+    'SGD': 'DFF',               # Use USD Fed Funds as proxy
 }
 
 # ==========================================

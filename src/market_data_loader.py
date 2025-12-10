@@ -2,7 +2,7 @@
 Market Data Loader Module.
 
 Handles ticker construction, sequential data retrieval via yfinance, and
-time-series normalization for portfolio assets.
+time-series normalisation for portfolio assets.
 """
 import pandas as pd
 import yfinance as yf
@@ -10,7 +10,10 @@ import time
 from typing import Any, Optional
 from .config import EXCHANGE_SUFFIX_MAP
 
-def load_market_data(data_package: dict[str, Any], report_filename: Optional[str] = None) -> dict[str, pd.DataFrame]:
+def load_market_data(
+    data_package: dict[str, Any], 
+    report_filename: Optional[str] = None
+) -> dict[str, pd.DataFrame]:
     """
     Constructs tickers and downloads daily market data for all portfolio assets.
 

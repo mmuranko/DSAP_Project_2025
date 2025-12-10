@@ -1,17 +1,37 @@
 import pandas as pd
 import time
-from typing import Callable
+from typing import Dict, Any, Optional, Union
 
-def reconstruct_portfolio(data_package, market_data_map=None, verbose=False):
+def reconstruct_portfolio(
+    data_package: Dict[str, Any], 
+    market_data_map: Optional[Dict[str, pd.DataFrame]] = None, 
+    verbose: bool = False
+) -> Dict[str, Union[pd.DataFrame, pd.Series]]:
     """
-    Reconstructs Daily Holdings and performs Dual-Currency Valuation.
-    
+    Reconstructs daily holdings and performs dual-currency valuation.
+
+    This function acts as the accountant of the simulation. It derives the exact
+    quantity of every asset held at the end of each day based on the initial state
+    and the chronological event log. It then applies matrix multiplication to
+    value these holdings in both their native currency and the portfolio base currency.
+
     Methodology:
-    1. Quantity Engines: Separate logic for Cash (by Currency) and Securities (by Symbol).
-    2. Linear Algebra Valuation: Matrix multiplication (Holdings * Prices * Rates).
-    3. Robust Gap Filling: Uses ffill+bfill for missing market data.
-    """
+    1. Cash Engine: Aggregates monetary flows to determine daily cash balances.
+    2. Securities Engine: Aggregates share changes to determine daily stock holdings.
+    3. Gap Filling: Uses forward/backward filling to handle non-trading days.
 
+    Args:
+        data_package (Dict[str, Any]): Dictionary containing initial state, events,
+            and report period metadata.
+        market_data_map (Optional[Dict[str, pd.DataFrame]]): Dictionary mapping
+            tickers to historical price DataFrames. Defaults to None.
+        verbose (bool): If True, prints progress logs. Defaults to False.
+
+    Returns:
+        Dict[str, Union[pd.DataFrame, pd.Series]]: Dictionary containing the
+        reconstructed matrices for holdings, prices, native valuation, base
+        valuation, and total daily NAV.
+    """
     if verbose:
         print("   [>] Reconstructing Portfolio History...")
         time.sleep(0.5)

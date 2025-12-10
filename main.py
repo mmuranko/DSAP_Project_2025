@@ -341,17 +341,27 @@ class PortfolioSimulationApp:
 
         self._print_section_header("STEP 4: MONTE CARLO SIMULATION")
 
-        # User input is requested for the number of paths, with a fallback to the default value.
-        user_input = input(f"Enter number of paths to generate [Default: {DEFAULT_PATHS}]: ").strip()
-        try:
-            n_paths = int(user_input) if user_input else DEFAULT_PATHS
-        except ValueError:
-            n_paths = DEFAULT_PATHS
-
-        # Enforce a valid positive integer for the number of paths.
-        if n_paths <= 0:
-            print(f" [!] Invalid number of paths ({n_paths}). Defaulting to {DEFAULT_PATHS}.")
-            n_paths = DEFAULT_PATHS
+        # Safe input check for the number of simulation paths
+        n_paths = DEFAULT_PATHS
+        
+        while True:
+            user_input = input(f"Enter number of paths to generate [Default: {DEFAULT_PATHS}]: ").strip()
+            
+            # Default value if no input is given
+            if not user_input:
+                n_paths = DEFAULT_PATHS
+                break
+            
+            # User input is validated
+            try:
+                val = int(user_input)
+                if 1 <= val <= 100000:
+                    n_paths = val
+                    break
+                else:
+                    print(" [!] Error: Number must be between 1 and 100,000. Please try again.")
+            except ValueError:
+                print(" [!] Error: Invalid input. Please enter a positive whole number.")
 
         print(f"\n [>] Starting Monte Carlo Simulation ({n_paths} paths)...")
         

@@ -1,3 +1,22 @@
+"""
+Margin Rate Data Provider (Hybrid).
+
+This module is responsible for reconstructing the historical daily cost of borrowing
+capital (margin rates) for specific target currencies. It employs a resilient
+"Hybrid" strategy to ensure complete data coverage:
+
+1. Primary Source (IBKR): It attempts to scrape precise, official historical 
+   margin rates directly from the Interactive Brokers website for recent months.
+2. Secondary Source (FRED): For dates prior to IBKR's public history, or if scraping 
+   fails, it falls back to Federal Reserve Economic Data (FRED) proxies (e.g., 
+   Fed Funds Rate, ESTR) adjusted by a fixed spread.
+3. Gap Filling: Any remaining missing data points (weekends, holidays) are filled 
+   using forward-filling (holding the last known rate) and backward-filling 
+   (safety net).
+
+The output is a normalized DataFrame of daily interest multipliers, ready for 
+calculating margin expenses in the simulation engine.
+"""
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -5,15 +24,28 @@ from dateutil.relativedelta import relativedelta
 import time
 from datetime import datetime
 import io
-from typing import Callable
+from typing import Optional, Dict, Any, Union
 from .config import CURRENCIES_365, TARGET_CURRENCIES, MARGIN_SPREADS, FRED_PROXIES
 
-def get_ibkr_rates_hybrid(start_date, end_date):
+def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     """
-    Returns margin rates strictly for TARGET_CURRENCIES.
-    1. Scrapes IBKR (Recent).
-    2. Backfills using FRED data (Deep History).
-    3. Backfills remaining gaps using the last known rate.
+    Orchestrates the retrieval of margin rates using a prioritized hybrid strategy.
+
+    This function combines recent scraped data with deep historical backfills to
+    produce a continuous timeline of interest rates for 'TARGET_CURRENCIES'.
+    
+    The hierarchy of data authority is:
+    1. Official IBKR Scraped Data (Highest Priority).
+    2. FRED Proxy Data + Spread (Backfill for older history).
+    3. Forward/Backward Fill (Gap bridging for non-business days).
+
+    Args:
+        start_date (pd.Timestamp): The beginning of the required data window.
+        end_date (pd.Timestamp): The end of the required data window.
+
+    Returns:
+        pd.DataFrame: A DataFrame indexed by Date, with columns for each target 
+        currency. Values represent the *daily* interest rate factor (e.g., 0.00015).
     """
     print(f"   [>] Fetching Margin Rates ({start_date.date()} to {end_date.date()})...")
     time.sleep(0.5)
@@ -58,8 +90,26 @@ def get_ibkr_rates_hybrid(start_date, end_date):
     return df_final.loc[start_date:end_date]
 
 
-def get_daily_margin_rates_scraper(start_date, end_date):
-    """ Scrapes IBKR Website """
+def get_daily_margin_rates_scraper(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    """
+    Scrapes official historical margin rates from the Interactive Brokers website.
+
+    Iterates through the requested months, constructing URLs for the IBKR 
+    'monthlyInterestRates' endpoint. It parses the returned HTML tables to extract 
+    benchmark rates for target currencies.
+    
+    Includes retry logic (exponential backoff) to handle transient network errors 
+    or rate limits.
+
+    Args:
+        start_date (pd.Timestamp): The start date for the scrape range.
+        end_date (pd.Timestamp): The end date for the scrape range.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing the scraped rates, pivoted so that 
+        currencies are columns and dates are the index. Returns an empty DataFrame 
+        on failure.
+    """
     base_url = "https://www.interactivebrokers.com/en/accounts/fees/monthlyInterestRates.php"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
@@ -132,8 +182,28 @@ def get_daily_margin_rates_scraper(start_date, end_date):
     return df.pivot_table(index='date', columns='currency', values='rate', aggfunc='mean')
 
 
-def get_fred_proxy_rates(start_date, end_date):
-    """ Downloads FRED data via CSV """
+def get_fred_proxy_rates(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+    """
+    Downloads and normalizes historical benchmark rates from FRED.
+
+    This acts as the fallback engine. It fetches proxy rates (defined in config)
+    for each currency, such as the Effective Federal Funds Rate for USD.
+
+    Crucially, this function transforms the raw benchmark data into a proxy for 
+    margin rates by:
+    1. Forward-filling monthly/weekly data to daily frequency.
+    2. Adding a defined 'Margin Spread' (from config) to approximate the markup 
+       charged by the broker.
+    3. Converting annualized percentage rates into daily multipliers based on 
+       day-count conventions (360 vs 365 days).
+
+    Args:
+        start_date (pd.Timestamp): The start date for the backfill.
+        end_date (pd.Timestamp): The end date for the backfill.
+
+    Returns:
+        pd.DataFrame: A DataFrame of daily proxy margin rates.
+    """
     if start_date > end_date: return pd.DataFrame()
 
     # Create empty container for the date range
@@ -184,7 +254,21 @@ def get_fred_proxy_rates(start_date, end_date):
 
     return proxy_data
 
-def parse_ibkr_rate(rate_str, currency):
+def parse_ibkr_rate(rate_str: str, currency: str) -> Optional[float]:
+    """
+    Parses and standardizes a raw rate string from the IBKR HTML table.
+
+    Converts strings like "1.58%" or "(0.50%)" into float representations.
+    It automatically applies the broker spread and adjusts for the specific 
+    currency's day-count convention (ACT/360 or ACT/365) to return a daily multiplier.
+
+    Args:
+        rate_str (str): The raw text string from the HTML cell.
+        currency (str): The currency code (used to determine day-count logic).
+
+    Returns:
+        Optional[float]: The calculated daily interest rate, or None if parsing fails.
+    """
     clean = rate_str.replace('%', '').replace('(', '-').replace(')', '').strip()
     if not clean or clean == '-': return None
     try:

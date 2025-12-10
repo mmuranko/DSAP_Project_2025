@@ -6,13 +6,11 @@ performance analysis between realised portfolio results, control baselines, and
 Monte Carlo simulation paths. It handles the calculation of standard financial risk 
 metrics (CAGR, Sharpe Ratio, Drawdown) and generates visualisation assets for reporting.
 """
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.ticker as mtick
-from typing import Callable
 from .config import RISK_FREE_RATE
 
 class PortfolioAnalyser:
@@ -293,7 +291,7 @@ class PortfolioAnalyser:
         
         def get_dynamic_bins_and_stride(data: pd.Series, target_bins: int = 40, target_ticks: int = 8) -> tuple[np.ndarray, int]:
             """
-            Calculates optimal histogram bin edges and a tick stride for x-axis labeling.
+            Calculates optimal histogram bin edges and a tick stride for x-axis labelling.
 
             This function dynamically adapts to the data range to prevent overcrowding or 
             undersampling of the distribution visualisation. It selects a "human-readable" 

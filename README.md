@@ -13,7 +13,7 @@ Unlike standard random walks, this engine is **Tax & Fee-Aware**. It rigorously 
 
 ## Key Features
 
-* **High-Fidelity Friction Modeling**:
+* **High-Fidelity Friction Modelling**:
     * **Transaction Fees**: Exact fee schedules for 15+ exchanges (NASDAQ, LSE, SIX, etc.).
     * **Stamp Duties**: Simulates UK Stamp Duty (0.5%), French FTT (0.4%), etc.
     * **Withholding Taxes**: Applies treaty-specific tax rates on dividends (e.g., 15% US, 35% CH).

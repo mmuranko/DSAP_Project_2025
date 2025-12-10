@@ -1,23 +1,35 @@
 import time
-from typing import Callable
+from typing import Dict, Any
 
-def apply_split_adjustments(data_package):
+def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Adjusts 'initial_state' and 'events' for retroactive events (e.g. tax adjustments) 
-    and stock splits using vectorised cumulative products. 
-    
-    LOGIC SUMMARY:
-    Instead of iterating through events chronologically and updating a 'holding' variable,
-    we calculate a 'multiplier' for every single row in the dataset at once.
-    
-    The Multiplier for any given event = (Total Cumulative Split Ratio) / (Running Cumulative Ratio at that time).
-    
-    Example (4:1 Split happens in the middle of the year):
-    - Total Split Ratio for the year = 4.
-    - Events BEFORE the split have a running ratio of 1. Multiplier = 4/1 = 4.
-    - Events AFTER the split have a running ratio of 4. Multiplier = 4/4 = 1 (No change).
+    Adjusts the initial state and event log for stock splits and retroactive events.
+
+    This function normalizes the portfolio history by applying a 'multiplier' to
+    all share quantities. This ensures that a share held in the past is expressed
+    in terms of today's share count (e.g., after a 4:1 split, 1 old share becomes
+    4 current shares).
+
+    Logic Summary:
+    Instead of iterating row-by-row, it uses vectorized cumulative products to
+    calculate a running split factor for every event.
+    The Multiplier for any given event = (Total Cumulative Split Ratio) / (Running Cumulative Ratio).
+
+    Key Operations:
+    1. Retroactive Event Handling: Moves events like tax adjustments that occurred
+       before the report start date to the start date itself.
+    2. Vectorized Adjustment: Calculates multipliers for the entire dataset in
+       one pass and updates trade quantities.
+    3. Initial State Adjustment: Updates the starting portfolio positions to match
+       the post-split reality.
+
+    Args:
+        data_package (Dict[str, Any]): Dictionary containing 'initial_state',
+            'events', and report metadata.
+
+    Returns:
+        Dict[str, Any]: A new data package with adjusted 'initial_state' and 'events'.
     """
-    
     print("   [>] Applying split adjustments and event processing...")
     time.sleep(0.5)
 
