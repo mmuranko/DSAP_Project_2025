@@ -24,7 +24,7 @@ from dateutil.relativedelta import relativedelta
 import time
 from datetime import datetime
 import io
-from typing import Optional, Dict, Any, Union
+from typing import Optional
 from .config import CURRENCIES_365, TARGET_CURRENCIES, MARGIN_SPREADS, FRED_PROXIES
 
 def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
