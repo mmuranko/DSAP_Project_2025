@@ -59,6 +59,8 @@ class PortfolioSimulationApp:
         # This allows the dependency checkers to easily verify if a step has been completed.
         self.raw_data = None
         self.clean_data = None
+        self.flow_series = None
+        
         self.market_data = None
         self.daily_rates = None
         self.engine = None
@@ -86,6 +88,8 @@ class PortfolioSimulationApp:
         # All input datasets are cleared to prevent the mixing of old and new data.
         self.raw_data = None
         self.clean_data = None
+        self.flow_series = None
+
         self.market_data = None
         self.daily_rates = None
         self.engine = None
@@ -175,6 +179,10 @@ class PortfolioSimulationApp:
             if choice == '0':
                 # Enforce a full reset to ensure the pipeline executes from a clean state
                 self.reset_state()
+                self.step_load_data()
+                self.step_fetch_market_data()
+                self.step_control_reconstruction()
+                self.step_run_simulation()
                 self.step_analyse()
             elif choice == '1':
                 # Enforce a full reset to ensure the pipeline executes from a clean state
@@ -234,9 +242,36 @@ class PortfolioSimulationApp:
         
         if self.raw_data is not None:
             # Applies stock split adjustments to the historic holding quantities
-            self.clean_data = dp.apply_split_adjustments(self.raw_data) #
+            self.clean_data = dp.apply_split_adjustments(self.raw_data)
         else:
             print(" [!] Data load failed.")
+            return
+
+        if self.clean_data is None:
+            events_df = None
+        else:
+            events_df = self.clean_data.get('events', None)
+
+        if events_df is None or events_df.empty:
+            # No deposit/withdrawal events present — ensure flow_series is empty Series
+            self.flow_events_df = pd.DataFrame(columns=['timestamp', 'event_type', 'cash_change_native', 'currency'])
+            self.flow_series = pd.Series(dtype=float)
+        else:
+            # Basic defensive check: required column(s)
+            if 'cash_change_native' not in events_df.columns or 'event_type' not in events_df.columns or 'timestamp' not in events_df.columns:
+                raise KeyError("events DataFrame must contain 'timestamp', 'event_type' and 'cash_change_native' columns")
+
+            # Filter only DEPOSIT and WITHDRAWAL events and normalise timestamp -> date
+            flows = events_df[events_df['event_type'].isin(['DEPOSIT', 'WITHDRAWAL'])].copy()
+            flows['timestamp'] = pd.to_datetime(flows['timestamp']).dt.normalize()
+
+            # Keep filtered event-level df for traceability (optional)
+            self.flow_events_df = flows
+
+            # Aggregate daily net flows (amounts are already base currency per your assumption)
+            daily_flows = flows.groupby('timestamp')['cash_change_native'].sum().sort_index()
+            # store as final flow_series to be used everywhere
+            self.flow_series = daily_flows
 
     # =========================================================================
     # STEP 2: MARKET DATA
@@ -278,7 +313,7 @@ class PortfolioSimulationApp:
             self.clean_data, 
             self.market_data, 
             self.daily_rates
-        ) #
+        )
         
         print("\n[+] Market data setup complete.")
 
@@ -332,11 +367,7 @@ class PortfolioSimulationApp:
         'Competence Universe'. Results are batched to manage memory usage.
         """
         # The Control Portfolio is a prerequisite, as it defines the baseline for comparison.
-        self._check_dependency(
-            self.control_nav is not None, 
-            "Step 3 (Control Portfolio)", 
-            self.step_control_reconstruction
-        )
+        self._check_dependency(self.control_nav is not None, "Step 3 (Control Portfolio)", self.step_control_reconstruction)
         if self.control_nav is None: return
 
         self._print_section_header("STEP 4: MONTE CARLO SIMULATION")
@@ -367,6 +398,7 @@ class PortfolioSimulationApp:
         
         all_navs = []
         paths_generated = 0
+        print(f"     Progress: 0/{n_paths} paths complete...", end='\r', flush=True)
         
         # --- 3. SIMULATION LOOP ---
         for batch_start in range(0, n_paths, BATCH_SIZE):
@@ -424,11 +456,14 @@ class PortfolioSimulationApp:
 
         self._print_section_header("STEP 5: ANALYTICS & VISUALISATION")
         
-        # The Analysis module is instantiated with the prepared datasets.
+        # Use the precomputed flow_series (computed in step_load_data and persisted into simulation_results)
+        flow_series = self.flow_series if getattr(self, 'flow_series', None) is not None else self.simulation_results.get('flow_series', pd.Series(dtype=float))
+
         analyser = PortfolioAnalyser(
             real_nav=self.simulation_results['real_nav_series'],
             control_nav=self.simulation_results['control_nav_series'],
-            sim_paths_df=self.simulation_results['simulated_paths']
+            sim_paths_df=self.simulation_results['simulated_paths'],
+            flow_series=flow_series
         )
 
         # Performance summaries are generated and displayed in the console.
@@ -470,7 +505,8 @@ class PortfolioSimulationApp:
             'datasets': {
                 'clean_data': self.clean_data,
                 'market_data': self.market_data,
-                'daily_rates': self.daily_rates
+                'daily_rates': self.daily_rates,
+                'flow_series': self.flow_series
             },
             'results': self.simulation_results
         }
@@ -502,6 +538,7 @@ class PortfolioSimulationApp:
         self.clean_data = artifact['datasets']['clean_data']
         self.market_data = artifact['datasets']['market_data']
         self.daily_rates = artifact['datasets']['daily_rates']
+        self.flow_series = artifact['datasets'].get('flow_series', pd.Series(dtype=float))
         self.simulation_results = artifact['results']
         
         # Navigation shortcuts are re-established for convenience.
@@ -515,7 +552,7 @@ class PortfolioSimulationApp:
                 self.clean_data, 
                 self.market_data, 
                 self.daily_rates
-            ) #
+            )
             
         print(" [+] Load complete.")
         input("Press Enter to continue...")

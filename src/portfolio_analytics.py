@@ -21,7 +21,7 @@ class PortfolioAnalyser:
     timeline and generates statistical summaries and plots to assess skill versus luck.
     """
 
-    def __init__(self, real_nav: pd.Series, control_nav: pd.Series, sim_paths_df: pd.DataFrame) -> None:
+    def __init__(self, real_nav: pd.Series, control_nav: pd.Series, sim_paths_df: pd.DataFrame, flow_series: pd.Series = None) -> None:
         """
         Initializes the analyser by aligning all input series to a shared date index.
 
@@ -48,10 +48,51 @@ class PortfolioAnalyser:
         self.real = self.real.loc[common_idx]
         self.control = self.control.loc[common_idx]
         self.sims = self.sims.loc[common_idx]
+
+        # Align flows to the same timeline (fill missing days with 0)
+        if flow_series is not None:
+            # Ensure index is datetime and normalized
+            if not isinstance(flow_series.index, pd.DatetimeIndex):
+                flow_series.index = pd.to_datetime(flow_series.index)
+            flow_series.index = flow_series.index.normalize()
+            
+            # Reindex to match the common simulation dates
+            self.flows = flow_series.reindex(common_idx).fillna(0.0)
+        else:
+            self.flows = pd.Series(0.0, index=common_idx)
         
     # ==========================================
     # INTERNAL CALCULATIONS
     # ==========================================
+    def _get_adjusted_returns_and_index(self, nav_series: pd.Series) -> tuple[pd.Series, pd.Series]:
+        """
+        Calculates daily returns adjusted for external cash flows (Deposits/Withdrawals).
+        Returns both the daily return series and the cumulative Wealth Index (Unit Price).
+        
+        Formula: r_t = (NAV_t - Flow_t) / NAV_{t-1} - 1
+        """
+        if nav_series.empty: 
+            return pd.Series(dtype=float), pd.Series(dtype=float)
+
+        # Subtract today's flow from today's ending NAV to get "Organic End Value"
+        # This assumes flows happen during the day or at end-of-day before measurement
+        organic_nav_end = nav_series - self.flows
+        
+        # Previous day's NAV
+        prev_nav = nav_series.shift(1)
+        
+        # Calculate Return
+        # Handle division by zero for the very first day or empty accounts
+        returns = (organic_nav_end / prev_nav) - 1.0
+        returns = returns.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        
+        # Construct Wealth Index (Start at 1.0)
+        # We assume the first day (t=0) has 0 return or is the base
+        wealth_index = (1 + returns).cumprod()
+        wealth_index.iloc[0] = 1.0 # normalize start
+        
+        return returns, wealth_index
+    
     def _calculate_metrics(self, series: pd.Series) -> dict[str, float]:
         """
         Calculates key financial performance indicators for a given NAV series.
@@ -72,14 +113,14 @@ class PortfolioAnalyser:
         if series.empty: return {}
         
         # Calculate daily percentage returns, dropping the first NaN value
-        returns = series.pct_change().dropna()
+        returns, wealth_index = self._get_adjusted_returns_and_index(series)
         
         # 1. CAGR (Geometric Mean)
         # Calculated using the total return over the period, annualised by day count.
         days = (series.index[-1] - series.index[0]).days
         if days <= 0: return {}
         
-        total_ret = series.iloc[-1] / series.iloc[0] - 1
+        total_ret = wealth_index.iloc[-1] / wealth_index.iloc[0] - 1
         cagr = (1 + total_ret) ** (365 / days) - 1
         
         # 2. Volatility (Annualised)
@@ -95,8 +136,8 @@ class PortfolioAnalyser:
         # 4. Maximum Drawdown
         # Calculated by computing the rolling maximum and finding the minimum percentage 
         # deviation from that maximum.
-        roll_max = series.cummax()
-        drawdown = (series - roll_max) / roll_max
+        roll_max = wealth_index.cummax()
+        drawdown = (wealth_index - roll_max) / roll_max
         max_dd = drawdown.min()
         
         return {
@@ -104,7 +145,7 @@ class PortfolioAnalyser:
             'Volatility': vol,
             'Sharpe': sharpe,
             'Max_DD': max_dd,
-            'Final_NAV': series.iloc[-1]
+            'Final_NAV': series.iloc[-1] # Keep raw NAV for display
         }
 
     def get_summary_table(self) -> tuple[pd.DataFrame, pd.DataFrame, object | None]:
@@ -238,12 +279,19 @@ class PortfolioAnalyser:
         """
         plt.figure(figsize=(12, 4))
         
-        dd_real = self._get_drawdown_series(self.real)
-        dd_control = self._get_drawdown_series(self.control)
+        # Helper lambda to get drawdown from Wealth Index
+        def get_dd(s):
+            _, wi = self._get_adjusted_returns_and_index(s)
+            roll = wi.cummax()
+            return (wi - roll) / roll
+
+        dd_real = get_dd(self.real)
+        dd_control = get_dd(self.control)
         
-        # Calculate Median Simulated Drawdown
+        # For simulation, we compute the median NAV path first, then its wealth index
+        # (Approximation: Median of paths vs Path of Medians. Path of Medians is safer here)
         median_sim_nav = self.sims.median(axis=1)
-        dd_sim = self._get_drawdown_series(median_sim_nav)
+        dd_sim = get_dd(median_sim_nav)
         
         # Plot Median Simulated Portfolio
         plt.plot(dd_sim, color='gray', linestyle=':', linewidth=1.5, label='Median Simulated Portfolio Drawdown')

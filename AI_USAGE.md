@@ -7,10 +7,10 @@ The conceptual framework, research questions, and financial logic are 100% my ow
 
 ## Usage Summary
 
-* **Implementation Assistance:** AI assisted with the specific implementation details of the `MonteCarloEngine` class and the "Intelligent Dependency Chaining" logic within the `main.py` menu system.
+* **Implementation Assistance:** AI assisted with the specific implementation details of the `MonteCarloEngine` class and the "Intelligent Dependency Chaining" logic within the `main.py` menu system. Furthermore, it assisted me with the intricate regex checks in `data_loader.py`.
 * **Optimisation:** I used AI to identify vectorisation strategies for `data_processor.py` to improve performance.
 * **Debugging:** AI tools were used to troubleshoot runtime errors and resolve library conflicts.
-* **Documentation:** AI assisted in drafting docstrings and formatting documentation files.
+* **Documentation:** AI assisted in drafting docstrings, comments, and type hints.
 
 ## Verification Statement
 I certify that:
