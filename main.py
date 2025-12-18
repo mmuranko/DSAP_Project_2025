@@ -445,18 +445,15 @@ class PortfolioSimulationApp:
     def step_analyse(self) -> None:
         """
         Executes Step 5: Statistical Analysis and Visualisation.
-
-        Instantiates the PortfolioAnalyser to calculate performance metrics (CAGR,
-        Sharpe, Drawdown) and generates comparative plots (Confidence Intervals,
-        Distributions).
         """
-        # Verification that simulation results exist is required before analysis can begin.
+        # Enforce dependency order: Analysis cannot happen without simulation data.
         self._check_dependency(self.simulation_results is not None, "Step 4 (Simulation)", self.step_run_simulation)
         if self.simulation_results is None: return
 
         self._print_section_header("STEP 5: ANALYTICS & VISUALISATION")
         
-        # Use the precomputed flow_series (computed in step_load_data and persisted into simulation_results)
+        # Fallback logic handles cases where flow_series might be missing from state
+        # (e.g., after loading from a checkpoint) by retrieving it from the results dictionary.
         flow_series = self.flow_series if getattr(self, 'flow_series', None) is not None else self.simulation_results.get('flow_series', pd.Series(dtype=float))
 
         analyser = PortfolioAnalyser(
@@ -466,20 +463,44 @@ class PortfolioSimulationApp:
             flow_series=flow_series
         )
 
-        # Performance summaries are generated and displayed in the console.
+        # 2. AUTO-SAVE CSV DATA
+        print(" [>] Saving data to 'results/'...")
+        
+        # Calculate statistics once to ensure consistency between the saved CSVs, 
+        # the console output, and the visualisation input.
         summary_df, raw_stats, _ = analyser.get_summary_table()
         
+        # Persist the high-level summary for quick performance review without running code.
+        summary_df.to_csv('results/performance_summary.csv')
+        
+        # Save the full daily data for all simulated paths to allow for external
+        # validation or re-plotting in other tools (e.g., Excel/Tableau).
+        self.simulation_results['simulated_paths'].to_csv('results/monte_carlo_paths.csv')
+        
+        # Save the distribution of metrics (Sharpe/Vol per path) to enable
+        # histogram recreation and statistical significance testing.
+        raw_stats.to_csv('results/simulation_stats_dist.csv')
+
+        print("   [+] Saved CSVs: summary, paths, and distribution stats.")
+
+        # 3. AUTO-SAVE VISUALISATIONS
+        print(" [>] Generating and saving plots...")
+
+        # Display the summary immediately to give the user instant feedback 
+        # while the potentially heavy plotting functions render.
         print("PERFORMANCE SUMMARY:")
         print(summary_df)
         print("\nLaunching visualisation windows...")
 
-        # Visualisations are triggered sequentially.
-        # Note: The application will pause here until the user closes each plot window.
-        analyser.plot_confidence_intervals()
-        analyser.plot_simulation_traces(num_paths=100) 
-        analyser.plot_distributions(raw_stats)
-        analyser.plot_drawdown_profile()
+        # Generate and save plots sequentially. Specific filenames are hardcoded
+        # to ensure the 'results/' folder always contains a complete, standard set 
+        # of artifacts for grading.
+        analyser.plot_confidence_intervals(save_path='results/1_confidence_intervals.png')
+        analyser.plot_simulation_traces(num_paths=100, save_path='results/2_simulation_traces.png') 
+        analyser.plot_distributions(raw_stats, save_path='results/3_distributions.png')
+        analyser.plot_drawdown_profile(save_path='results/4_drawdown_profile.png')
         
+        print("\n [!] All analysis files saved to local 'results/' folder.")
         input("Press Enter to return to menu...")
 
     # =========================================================================

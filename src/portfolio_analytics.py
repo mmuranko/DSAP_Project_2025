@@ -205,7 +205,7 @@ class PortfolioAnalyser:
     # VISUALISATION METHODS
     # ==========================================
 
-    def plot_confidence_intervals(self) -> None:
+    def plot_confidence_intervals(self, save_path: str = None) -> None:
         """ 
         Generates a plot comparing the Real and Control portfolios against the 
         confidence intervals derived from the Monte Carlo simulation.
@@ -239,10 +239,15 @@ class PortfolioAnalyser:
         plt.grid(True, alpha=0.3)
         plt.xlim(self.sims.index[0], self.sims.index[-1])
         plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   [+] Saved plot to {save_path}")
+
         plt.show()
 
 
-    def plot_simulation_traces(self, num_paths: int = 150) -> None:
+    def plot_simulation_traces(self, num_paths: int = 150, save_path: str = None) -> None:
         """
         Visualizes a subset of individual simulation traces to illustrate path variance.
 
@@ -266,10 +271,15 @@ class PortfolioAnalyser:
         plt.grid(True, alpha=0.3)
         plt.xlim(self.sims.index[0], self.sims.index[-1])
         plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   [+] Saved plot to {save_path}")
+
         plt.show()
 
 
-    def plot_drawdown_profile(self) -> None:
+    def plot_drawdown_profile(self, save_path: str = None) -> None:
         """ 
         Plots the historical drawdown profile over time.
 
@@ -309,10 +319,15 @@ class PortfolioAnalyser:
         plt.grid(True, alpha=0.3)
         plt.xlim(self.sims.index[0], self.sims.index[-1])
         plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   [+] Saved plot to {save_path}")
+
         plt.show()
 
 
-    def plot_distributions(self, sim_raw_stats: pd.DataFrame) -> None:
+    def plot_distributions(self, sim_raw_stats: pd.DataFrame, save_path: str = None) -> None:
         """ 
         Generates histograms for key metrics (Final NAV, Maximum Drawdown, Volatility, Sharpe).
         
@@ -440,4 +455,9 @@ class PortfolioAnalyser:
         axes[3].xaxis.set_major_formatter(mtick.FormatStrFormatter('%.2f'))
 
         plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"   [+] Saved plot to {save_path}")
+
         plt.show()

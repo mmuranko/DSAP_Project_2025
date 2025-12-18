@@ -1,48 +1,58 @@
-# DSAP_Project_2025
-Final project for the Data Science and Advanced Programming 2025 Course at HEC Lausanne.
-# Monte Carlo Portfolio Simulator
+# Portfolio Benchmarking & Stochastic Simulation Engine
 
-### "Skill vs. Luck" Analysis for Active Traders
-
-## Abstract
-This project is a sophisticated financial simulation engine designed to audit active trading performance. It takes a real-world **Interactive Brokers (IBKR)** activity statement and simulates thousands of alternative "random walk" trading scenarios.
-
-Unlike standard random walks, this engine is **Tax & Fee-Aware**. It rigorously models transaction frictions—including exchange-specific stamp duties, commission schedules, withholding taxes on dividends, and dynamic margin interest rates—to create a mathematically valid "Shadow Benchmark." This allows investors to isolate true Alpha (skill) from the noise of market beta and luck.
+**Author:** [Your Name]
+**Student ID:** [Your Student ID]
+**Course:** Advanced Programming (Fall 2025)
+**Date:** January 11, 2026
 
 ---
 
-## Key Features
+## 1. Project Overview
 
-* **High-Fidelity Friction Modelling**:
-    * **Transaction Fees**: Exact fee schedules for 15+ exchanges (NASDAQ, LSE, SIX, etc.).
-    * **Stamp Duties**: Simulates UK Stamp Duty (0.5%), French FTT (0.4%), etc.
-    * **Withholding Taxes**: Applies treaty-specific tax rates on dividends (e.g., 15% US, 35% CH).
-* **Dynamic Margin Engine**:
-    * Scrapes historical margin rates from IBKR and backfills using FRED/OECD data.
-    * Calculates daily interest expenses on negative currency balances.
-* **Corporate Action Handler**:
-    * Automatically handles stock splits (retroactive adjustment) and dividends.
-    * Projects future dividends to ensure simulated paths don't miss cash flows.
-* **Shadow Benchmarking**:
-    * Re-runs the *actual* historical trades through the simulation engine to normalize costs, ensuring an "apples-to-apples" comparison between reality and random scenarios.
+This project implements a **Portfolio Benchmarking and Stochastic Simulation framework**.
+
+The application serves as a simulation tool to compare actual portfolio performance against stochastic counterfactuals. By modeling full transaction economics—including dividends, margin rates, and transaction fees—the engine quantifies decision-making quality within the specific asset universe available to the portfolio manager.
+
+### Key Features
+* **Hybrid Data Sourcing:** Combines IBKR trade logs, `yfinance` market data, and a custom scraper for historical margin rates (with FRED fallback).
+* **Full Economics Modelling:** Accounts for stock splits, withholding taxes, and margin costs to create a realistic control environment.
+* **Stochastic Benchmarking:** Generates $N$ counterfactual portfolio paths to construct a rigorous performance baseline.
+* **State Machine Architecture:** Orchestrates data ingestion, market data acquisition, and simulation steps to ensure data integrity.
+* **Reproducible Analysis:** Automatically persists all numerical results (CSVs) and visualizations (PNGs) to a local `results/` directory.
 
 ---
 
-## Project Structure
+## 2. Research Question
+
+**"How does the realized performance of the portfolio compare against a distribution of stochastic counterfactuals derived from the same asset universe?"**
+
+Standard benchmarking methods (e.g., vs. S&P 500) often fail to account for the specific opportunity set and constraints of the investor. This project solves this by constructing a custom benchmark:
+1.  **Control Portfolio:** A faithful reconstruction of the actual portfolio using the simulation engine's logic to normalize fees and execution timing.
+2.  **Competence Universe:** A distribution of simulated portfolios where trade timing and capital allocation are fixed, but assets are randomly selected from the pool of instruments the investor actually traded.
+
+---
+
+## 3. Project Structure
+
+The project follows a modular structure in the `src/` directory, orchestrated by `main.py`.
 
 ```text
-your-project/
-├── data/                     # Input folder for IBKR CSV reports
-├── results/                  # Output folder for simulation artifacts (.pkl)
-├── src/                      # Source code modules
-│   ├── __init__.py
-│   ├── config.py             # Centralized settings (Fees, Taxes, Currencies)
-│   ├── data_loader.py        # Parses complex stacked IBKR CSVs
-│   ├── data_processor.py     # Vectorized split-adjustment engine
-│   ├── market_data_loader.py # Fetches and resamples Yahoo Finance data
-│   ├── margin_rates.py       # Scrapes and backfills interest rate data
-│   ├── simulation_engine.py  # Core Monte Carlo logic
-│   └── portfolio_reconstructor.py # Matrix-based valuation engine
-├── main.py                   # Entry point
-├── requirements.txt          # Dependency list
-└── README.md                 # Project documentation
+├── data/
+│   ├── checkpoints/           # Serialized simulation states (.pkl)
+│   └── [data].csv             # Input IBKR Activity Report (CSV)
+├── results/                   # Auto-generated analysis artifacts (CSVs & PNGs)
+├── src/
+│   ├── __init__.py            # Package initialization
+│   ├── config.py              # Fee schedules, currency lists, and constants
+│   ├── data_loader.py         # ETL pipeline for IBKR "stacked" CSVs
+│   ├── data_processor.py      # Logic for corporate actions and stock splits
+│   ├── market_data_loader.py  # yfinance API wrapper with retry logic
+│   ├── margin_rates.py        # Hybrid scraper (IBKR Website + FRED) for interest rates
+│   ├── simulation_engine.py   # Core Monte Carlo logic & Competence Universe selection
+│   ├── portfolio_reconstructor.py # Cash & Securities Engines for daily NAV calculation
+│   └── portfolio_analytics.py # Statistical metrics (Sharpe, Drawdown) & plotting
+├── main.py                    # Application Entry Point
+├── requirements.txt           # Python dependencies
+├── PROPOSAL.md                # Project Proposal
+├── AI_USAGE.md                # AI Tools Declaration
+└── README.md                  # Documentation
