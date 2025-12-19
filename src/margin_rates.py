@@ -51,7 +51,7 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
     time.sleep(0.5)
     
     # 1. Scrape Recent Data
-    df_scraped = get_daily_margin_rates_scraper(start_date, end_date)
+    df_scraped = _get_daily_margin_rates_scraper(start_date, end_date)
     
     if df_scraped.empty:
         min_scraped_date = end_date 
@@ -60,11 +60,11 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
         min_scraped_date = df_scraped.index.min()
         print(f"       - Scraper returned data from: {min_scraped_date.date()}")
 
-    # 2. Backfill Deep History with FRED
+    # 2. Backfill Rest with FRED
     if min_scraped_date > start_date:
         backfill_end = min_scraped_date - pd.Timedelta(days=1)
         print(f"       - Backfilling history from {start_date.date()} to {backfill_end.date()} using FRED...")
-        df_backfill = get_fred_proxy_rates(start_date, backfill_end)
+        df_backfill = _get_fred_proxy_rates(start_date, backfill_end)
         
         # Combine: Priority to Scraped Data, then FRED
         df_final = pd.concat([df_backfill, df_scraped])
@@ -90,7 +90,7 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
     return df_final.loc[start_date:end_date]
 
 
-def get_daily_margin_rates_scraper(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+def _get_daily_margin_rates_scraper(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     """
     Scrapes official historical margin rates from the Interactive Brokers website.
 
@@ -182,7 +182,7 @@ def get_daily_margin_rates_scraper(start_date: pd.Timestamp, end_date: pd.Timest
     return df.pivot_table(index='date', columns='currency', values='rate', aggfunc='mean')
 
 
-def get_fred_proxy_rates(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+def _get_fred_proxy_rates(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     """
     Downloads and normalizes historical benchmark rates from FRED.
 

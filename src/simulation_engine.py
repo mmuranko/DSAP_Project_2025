@@ -91,7 +91,6 @@ class MonteCarloEngine:
             else:
                 self.dividend_map[ticker] = pd.Series(dtype=float)
             """
-            #"""
             # --- Dividends ---
             # Dividend data is often sparse. If a simulation path picks a stock that 
             # pays dividends, but the data source is incomplete for the current year,
@@ -126,7 +125,6 @@ class MonteCarloEngine:
             # The 'Close' column is converted to a dictionary for O(1) retrieval speed,
             # replacing slower DataFrame indexing (.loc) in the main loop.
             self.price_cache[ticker] = df['Close'].to_dict()
-            #"""
 
     def _get_fx_rate(self, from_curr: str, to_curr: str, date: pd.Timestamp) -> float:
         """
@@ -281,8 +279,6 @@ class MonteCarloEngine:
             d_naive = d.replace(tzinfo=None).normalize()
             
             # --- A. Simulate Dividends ---
-            # This block runs for ALL scenarios (random and actual). It iterates through
-            # currently held assets to check if a dividend was paid on this date.
             for sym, qty in list(current_holdings.items()):
                 if abs(qty) < 1e-9: continue
                 
