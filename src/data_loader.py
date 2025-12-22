@@ -67,7 +67,8 @@ def get_section(df_raw: pd.DataFrame, section_name: str) -> Optional[pd.DataFram
     except IndexError:
         return None
     except Exception as e:
-        print(f"       [!] Warning: Error parsing section '{section_name}': {e}")
+        print(f" [!] Warning: Error parsing section '{section_name}': {e}")
+        time.sleep(0.5)
         return None
 
 def clean_symbol(symbol: Any) -> Optional[str]:
@@ -151,7 +152,8 @@ def parse_initial_state(
         'quantity', 'value_native']. Returns an empty DataFrame on failure.
     """
     if df_mtm is None:
-        print("       [!] Warning: 'Mark-to-Market Performance Summary' section missing. Initial state empty.")
+        print(" [!] Warning: 'Mark-to-Market Performance Summary' section missing. Initial state empty.")
+        time.sleep(0.5)
         return pd.DataFrame(columns=['symbol', 'asset_category', 'currency', 'quantity', 'value_native'])
 
     # --- 1. Process Stocks ---
@@ -506,12 +508,12 @@ def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
         keys ('initial_state', 'events', 'financial_info', etc.), or None if 
         parsing fails.
     """
-    print(f"   [>] Reading IBKR report: {filepath}")
+    print(f"\n [>] Reading IBKR report: {filepath}...")
     time.sleep(0.5)
 
     try:
-        # FIX: Add 'names' to force a wide schema and prevent skipping wide rows.
-        # FIX: Change encoding to 'utf-8-sig' to handle potential BOM characters safely.
+        # Added 'names' to force a wide schema and prevent skipping wide rows.
+        # Changed encoding to 'utf-8-sig' to handle potential BOM characters safely.
         df_raw = pd.read_csv(
             filepath, 
             header=None, 
@@ -531,19 +533,21 @@ def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
         
         try:
             period_row = df_raw[(df_raw[0] == 'Statement') & (df_raw[2] == 'Period')]
-            period_string = period_row.iloc[0, 3] 
+            period_string = str(period_row.iloc[0, 3])  # Force cast to string
             start_str, end_str = period_string.split(' - ')
             
             report_start_date = pd.to_datetime(start_str, format='%B %d, %Y').normalize()
             report_end_date = pd.to_datetime(end_str, format='%B %d, %Y').normalize() + pd.Timedelta(days=1)
         except Exception as e:
-            print(f"       [!] Warning parsing dates: {e}")
+            print(f" [!] Warning parsing dates: {e}")
+            time.sleep(0.5)
 
         try:
             base_curr_row = df_raw[(df_raw[0] == 'Account Information') & (df_raw[2] == 'Base Currency')]
             base_currency = base_curr_row.iloc[0, 3]
         except Exception as e:
-            print(f"       [!] Warning parsing Base Currency: {e}")
+            print(f" [!] Warning parsing Base Currency: {e}")
+            time.sleep(0.5)
 
         # --- 2. Symbol Discovery Phase ---
 
@@ -603,39 +607,48 @@ def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
         # Parse Reference Data
         df_financial_info = get_section(df_raw, 'Financial Instrument Information')
         if df_financial_info is not None:
-            target_cols = ['Symbol', 'Security ID', 'Listing Exch']
+            target_cols = ['Underlying', 'Security ID', 'Listing Exch']
             cols_present = [c for c in target_cols if c in df_financial_info.columns]
             df_financial_info = df_financial_info[cols_present].copy()
             
-            if 'Symbol' in df_financial_info.columns:
-                df_financial_info['Symbol'] = df_financial_info['Symbol'].apply(clean_symbol)
-                df_financial_info = df_financial_info.dropna(subset=['Symbol'])
+            # Apply standard cleaning to the 'Underlying' column
+            if 'Underlying' in df_financial_info.columns:
+                df_financial_info['Underlying'] = df_financial_info['Underlying'].apply(clean_symbol)
+                df_financial_info = df_financial_info.dropna(subset=['Underlying'])
 
-            df_financial_info = df_financial_info.rename(columns={
-                'Symbol': 'symbol',
-                'Security ID': 'ISIN',
-                'Listing Exch': 'Exchange'
-            }).drop_duplicates(subset=['symbol'])
+                # Rename 'Underlying' to 'symbol' to match the application's internal schema
+                df_financial_info = df_financial_info.rename(columns={
+                    'Underlying': 'symbol',
+                    'Security ID': 'ISIN',
+                    'Listing Exch': 'Exchange'
+                })
+                
+                # Deduplicate based on the clean symbol
+                df_financial_info = df_financial_info.drop_duplicates(subset=['symbol'])
+            else:
+                # Safety fallback if Underlying is missing
+                df_financial_info = pd.DataFrame(columns=['symbol', 'ISIN', 'Exchange'])
         else:
             df_financial_info = pd.DataFrame(columns=['symbol', 'ISIN', 'Exchange'])
         
         # --- 4. Critical Validation ---
         if report_start_date is None or report_end_date is None:
-            print("   [!] CRITICAL ERROR: Could not parse Report Period (Start/End dates).")
-            print("       The input file format might have changed.")
+            print(" [!] CRITICAL ERROR: Could not parse Report Period (Start/End dates).")
+            print("     The input file format might have changed.")
+            time.sleep(0.5)
             return None
 
         if df_initial_state.empty and df_event_log.empty:
-            print("   [!] CRITICAL ERROR: No positions or events found.")
-            print("       Check if the CSV file is empty or corrupted.")
+            print(" [!] CRITICAL ERROR: No positions or events found.")
+            print("     Check if the CSV file is empty or corrupted.")
+            time.sleep(0.5)
             return None
 
         if report_start_date and report_end_date:
-            print(f"       - Period: {report_start_date.date()} to {report_end_date.date()}")
-        print(f"       - Initial Positions: {len(df_initial_state)}")
-        print(f"       - Total Events: {len(df_event_log)}")
-        print(f"   [+] Report loaded successfully.")
-        print()
+            print(f"     - Period: {report_start_date.date()} to {report_end_date.date()}")
+        print(f"     - Initial Positions: {len(df_initial_state)}")
+        print(f"     - Total Events: {len(df_event_log)}")
+        print(f" [+] Report loaded successfully.\n")
         time.sleep(0.5)
 
         return {
@@ -648,10 +661,12 @@ def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
         }
         
     except FileNotFoundError:
-        print(f"   [!] Error: The file was not found at '{filepath}'")
+        print(f" [!] Error: The file was not found at '{filepath}'")
+        time.sleep(0.5)
         return None
     except Exception as e:
-        print(f"   [!] Fatal error loading report: {e}")
+        print(f" [!] Fatal error loading report: {e}")
+        time.sleep(0.5)
         import traceback
         traceback.print_exc()
         return None

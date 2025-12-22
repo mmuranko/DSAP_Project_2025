@@ -78,9 +78,13 @@ class MonteCarloEngine:
         self.price_cache = {}
 
         for ticker, df in self.market_data.items():
-            if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
-            df.index = df.index.normalize()
+            # Explicitly cast to DatetimeIndex so Pylance knows .tz and .normalize exist
+            dt_idx = pd.DatetimeIndex(df.index)
+
+            if dt_idx.tz is not None:
+                dt_idx = dt_idx.tz_localize(None)
+            
+            df.index = dt_idx.normalize()
             """
             # --- Dividends ---
             # Dividend data is extracted directly from the market data.
@@ -111,7 +115,7 @@ class MonteCarloEngine:
                         projected_dates = past_divs.index + pd.Timedelta(days=365)
                         projected_divs = pd.Series(past_divs.values, index=projected_dates)
                         combined_divs = pd.concat([raw_divs, projected_divs]).sort_index()
-                        combined_divs.index = combined_divs.index.normalize()
+                        combined_divs.index = pd.DatetimeIndex(combined_divs.index).normalize()
                         self.dividend_map[ticker] = combined_divs
                     else:
                         self.dividend_map[ticker] = raw_divs
@@ -284,6 +288,11 @@ class MonteCarloEngine:
                 
                 if sym in self.dividend_map:
                     if d_naive in self.dividend_map[sym].index:
+                        # Force scalar extraction
+                        div_val = self.dividend_map[sym].loc[d_naive]
+                        if isinstance(div_val, pd.Series):
+                            div_val = div_val.iloc[0]
+                        div_per_share = float(div_val)
                         div_per_share = self.dividend_map[sym].loc[d_naive]
                         gross_div_total = div_per_share * qty
                         
@@ -334,6 +343,8 @@ class MonteCarloEngine:
                     is_buy = (row['event_type'] == 'TRADE_BUY')                    
                     orig_val = abs(row['cash_change_native']) # The monetary value of the original trade.
                     
+                    new_sym = None
+
                     if override_trade_symbol:
                         # CONTROL PATH: Force the simulation to use the actual historical asset to build the 
                         # event log of the real portfolio with the same restrictions as for the simulated paths.
@@ -342,12 +353,48 @@ class MonteCarloEngine:
                     else:
                         # RANDOM PATH: Select a random asset from the Competence Universe.
                         if is_buy:
-                            new_sym = random.choice(self.stock_universe)
+                            # --- STRATEGY 3 SAFEGUARD ---
+                            # Attempt to find a valid asset that actually existed on this date.
+                            # We limit retries to prevent infinite loops on holidays or empty data days.
+                            max_retries = 50
+                            found_valid = False
+                            
+                            for _ in range(max_retries):
+                                candidate = random.choice(self.stock_universe)
+                                
+                                # 1. Check if we have any data map for this ticker
+                                if candidate not in self.market_data:
+                                    continue
+                                
+                                prices = self.market_data[candidate]
+                                
+                                # 2. Check if the specific date exists in the index
+                                # Using d_naive because market data index is typically normalized/naive
+                                if d_naive in prices.index:
+                                    val = prices.loc[d_naive]['Close']
+                                    if isinstance(val, pd.Series):
+                                        val = val.iloc[0] # Handle rare duplicates
+                                        
+                                    price_check = float(val) # Explicit cast to float
+                                    
+                                    # 3. Check for strictly positive price
+                                    if price_check > 0:
+                                        new_sym = candidate
+                                        found_valid = True
+                                        break
+                            
+                            if not found_valid:
+                                continue # Skip this trade entirely
+                                
                         else:
                             # For sells, assets from the current simulated holdings must be chosen
                             valid_candidates = [s for s, q in current_holdings.items() if q > 0.0001]
                             if not valid_candidates: continue
                             new_sym = random.choice(valid_candidates)
+
+                    # Safety Check: If new_sym is still None, skip processing
+                    if new_sym is None:
+                        continue
 
                     new_curr = self.sym_curr_map.get(new_sym, self.base_currency)
 
@@ -405,7 +452,8 @@ class MonteCarloEngine:
                     if curr in self.daily_rates.columns:
                         try:
                             # Forward-fill lookup for the closest available interest rate.
-                            idx_r = self.daily_rates.index.get_indexer([d_naive], method='ffill')[0]
+                            target_idx = pd.Index([d_naive])
+                            idx_r = self.daily_rates.index.get_indexer(target_idx, method='ffill')[0]
                             if idx_r != -1: rate = self.daily_rates.iloc[idx_r][curr]
                         except: pass
                     
@@ -433,7 +481,7 @@ class MonteCarloEngine:
         """
         results = []
         if verbose:
-            print(f"   [>] Generating {num_paths} simulated paths...")
+            print(f" [>] Generating {num_paths} simulated paths...")
             time.sleep(0.5)
 
         for i in range(num_paths):
@@ -449,7 +497,7 @@ class MonteCarloEngine:
             }
             results.append(sim_package)
         if verbose:
-            print(f"   [+] Batch of {num_paths} paths generated.")
+            print(f" [+] Batch of {num_paths} paths generated.")
             time.sleep(0.5)
 
         return results
@@ -465,13 +513,13 @@ class MonteCarloEngine:
         Returns:
             list[dict[str, Any]]: A list containing the single Control Portfolio data package.
         """
-        print("   [>] Generating Control Portfolio...")
+        print(" [>] Generating Control Portfolio...")
         time.sleep(0.5)
 
         # Runs the path generation but forces the use of historical symbols (override_trade_symbol=True).
         sim_events = self._run_single_path(override_trade_symbol=True)
 
-        print("   [+] Control Portfolio generated.")
+        print(" [+] Control Portfolio generated.")
         time.sleep(0.5)
 
         return [ {

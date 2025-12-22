@@ -9,8 +9,11 @@ metrics (CAGR, Sharpe Ratio, Drawdown) and generates visualisation assets for re
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 import seaborn as sns
 import matplotlib.ticker as mtick
+import time
+from typing import Optional, Any
 from .config import RISK_FREE_RATE
 
 class PortfolioAnalyser:
@@ -21,7 +24,7 @@ class PortfolioAnalyser:
     timeline and generates statistical summaries and plots to assess skill versus luck.
     """
 
-    def __init__(self, real_nav: pd.Series, control_nav: pd.Series, sim_paths_df: pd.DataFrame, flow_series: pd.Series = None) -> None:
+    def __init__(self, real_nav: pd.Series, control_nav: pd.Series, sim_paths_df: pd.DataFrame, flow_series: Optional[pd.Series] = None) -> None:
         """
         Initializes the analyser by aligning all input series to a shared date index.
 
@@ -180,7 +183,7 @@ class PortfolioAnalyser:
                           index=['Real Portfolio', 'Control Portfolio', 'Simulated (Avg)'])
         
         # Define display formatting
-        format_map = {
+        format_map: dict[str, Any] = {
             'CAGR': '{:.2%}',
             'Volatility': '{:.2%}',
             'Sharpe': '{:.2f}',
@@ -205,7 +208,7 @@ class PortfolioAnalyser:
     # VISUALISATION METHODS
     # ==========================================
 
-    def plot_confidence_intervals(self, save_path: str = None) -> None:
+    def plot_confidence_intervals(self, save_path: Optional[str] = None) -> None:
         """ 
         Generates a plot comparing the Real and Control portfolios against the 
         confidence intervals derived from the Monte Carlo simulation.
@@ -241,13 +244,14 @@ class PortfolioAnalyser:
         plt.tight_layout()
 
         if save_path:
+            print(f" [>] Saving plot to {save_path}")
+            time.sleep(0.5)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"   [+] Saved plot to {save_path}")
 
         plt.show()
 
 
-    def plot_simulation_traces(self, num_paths: int = 150, save_path: str = None) -> None:
+    def plot_simulation_traces(self, num_paths: int = 150, save_path: Optional[str] = None) -> None:
         """
         Visualizes a subset of individual simulation traces to illustrate path variance.
 
@@ -273,13 +277,14 @@ class PortfolioAnalyser:
         plt.tight_layout()
 
         if save_path:
+            print(f" [>] Saving plot to {save_path}")
+            time.sleep(0.5)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"   [+] Saved plot to {save_path}")
 
         plt.show()
 
 
-    def plot_drawdown_profile(self, save_path: str = None) -> None:
+    def plot_drawdown_profile(self, save_path: Optional[str] = None) -> None:
         """ 
         Plots the historical drawdown profile over time.
 
@@ -321,13 +326,14 @@ class PortfolioAnalyser:
         plt.tight_layout()
 
         if save_path:
+            print(f" [>] Saving plot to {save_path}")
+            time.sleep(0.5)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"   [+] Saved plot to {save_path}")
 
         plt.show()
 
 
-    def plot_distributions(self, sim_raw_stats: pd.DataFrame, save_path: str = None) -> None:
+    def plot_distributions(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
         """ 
         Generates histograms for key metrics (Final NAV, Maximum Drawdown, Volatility, Sharpe).
         
@@ -346,7 +352,7 @@ class PortfolioAnalyser:
             upper = np.ceil(data.max() / step_size) * step_size
             return np.arange(lower, upper + step_size + (step_size/1000), step_size)
         
-        def add_lines(ax: object, real_val: float, control_val: float) -> None:
+        def add_lines(ax: Axes, real_val: float, control_val: float) -> None:
             """Helper to add vertical reference lines to histograms."""
             ax.axvline(real_val, color='red', linestyle='-', linewidth=2, label='Real')
             ax.axvline(control_val, color='blue', linestyle='--', linewidth=2, label='Control')
@@ -411,7 +417,7 @@ class PortfolioAnalyser:
         # 1. Final NAV Distribution
         bins_nav, stride_nav = get_dynamic_bins_and_stride(sim_raw_stats['Final_NAV'])
         
-        sns.histplot(sim_raw_stats['Final_NAV'], bins=bins_nav, kde=True, ax=axes[0], color='skyblue')
+        sns.histplot(data=sim_raw_stats, x='Final_NAV', bins=bins_nav, kde=True, ax=axes[0], color='skyblue')
         add_lines(axes[0], self.real.iloc[-1], self.control.iloc[-1])
         axes[0].set_title('Final NAV Distribution')
         axes[0].set_xlabel("Net Asset Value [CHF]")
@@ -422,7 +428,7 @@ class PortfolioAnalyser:
         # 2. Maximum Drawdown Distribution
         bins_dd, stride_dd = get_dynamic_bins_and_stride(sim_raw_stats['Max_DD'])
         
-        sns.histplot(sim_raw_stats['Max_DD'], bins=bins_dd, kde=True, ax=axes[1], color='salmon')
+        sns.histplot(data=sim_raw_stats, x='Max_DD', bins=bins_dd, kde=True, ax=axes[1], color='salmon')
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
         add_lines(axes[1], real_stats['Max_DD'], control_stats['Max_DD'])
@@ -435,7 +441,7 @@ class PortfolioAnalyser:
         # 3. Volatility Distribution
         bins_vol, stride_vol = get_dynamic_bins_and_stride(sim_raw_stats['Volatility'])
         
-        sns.histplot(sim_raw_stats['Volatility'], bins=bins_vol, kde=True, ax=axes[2], color='lightgreen')
+        sns.histplot(sim_raw_stats, x='Volatility', bins=bins_vol, kde=True, ax=axes[2], color='lightgreen')
         add_lines(axes[2], real_stats['Volatility'], control_stats['Volatility'])
         axes[2].set_title('Volatility Distribution')
         axes[2].set_xlabel("Annualised Volatility [%]")
@@ -446,7 +452,7 @@ class PortfolioAnalyser:
         # 4. Sharpe Ratio Distribution
         bins_sharpe, stride_sharpe = get_dynamic_bins_and_stride(sim_raw_stats['Sharpe'])
         
-        sns.histplot(sim_raw_stats['Sharpe'], bins=bins_sharpe, kde=True, ax=axes[3], color='gold')
+        sns.histplot(sim_raw_stats, x='Sharpe', bins=bins_sharpe, kde=True, ax=axes[3], color='gold')
         add_lines(axes[3], real_stats['Sharpe'], control_stats['Sharpe'])
         axes[3].set_title('Sharpe Ratio Distribution')
         axes[3].set_xlabel("Sharpe Ratio")
@@ -457,7 +463,8 @@ class PortfolioAnalyser:
         plt.tight_layout()
 
         if save_path:
+            print(f" [>] Saving plot to {save_path}")
+            time.sleep(0.5)
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"   [+] Saved plot to {save_path}")
 
         plt.show()

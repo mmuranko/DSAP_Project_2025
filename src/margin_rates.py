@@ -47,7 +47,7 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
         pd.DataFrame: A DataFrame indexed by Date, with columns for each target 
         currency. Values represent the *daily* interest rate factor (e.g., 0.00015).
     """
-    print(f"   [>] Fetching Margin Rates ({start_date.date()} to {end_date.date()})...")
+    print(f" [>] Fetching Margin Rates ({start_date.date()} to {end_date.date()})...")
     time.sleep(0.5)
     
     # 1. Scrape Recent Data
@@ -55,15 +55,18 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
     
     if df_scraped.empty:
         min_scraped_date = end_date 
-        print("       [!] Warning: IBKR Scraper returned no data. Switching to full FRED backfill.")
+        print(" [!] Warning: IBKR Scraper returned no data. Switching to full FRED backfill.")
+        time.sleep(0.5)
     else:
         min_scraped_date = df_scraped.index.min()
-        print(f"       - Scraper returned data from: {min_scraped_date.date()}")
+        print(f"     - Scraper returned data from: {min_scraped_date.date()}")
+        time.sleep(0.5)
 
     # 2. Backfill Rest with FRED
     if min_scraped_date > start_date:
         backfill_end = min_scraped_date - pd.Timedelta(days=1)
-        print(f"       - Backfilling history from {start_date.date()} to {backfill_end.date()} using FRED...")
+        print(f"     - Backfilling history from {start_date.date()} to {backfill_end.date()} using FRED...")
+        time.sleep(0.5)
         df_backfill = _get_fred_proxy_rates(start_date, backfill_end)
         
         # Combine: Priority to Scraped Data, then FRED
@@ -83,8 +86,7 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
     # 4. Strict Formatting & Filtering
     df_final = df_final.reindex(columns=TARGET_CURRENCIES)
     
-    print(f"   [+] Margin rates loaded successfully.")
-    print()
+    print(" [+] Margin rates loaded successfully.")
     time.sleep(0.5)
 
     return df_final.loc[start_date:end_date]
@@ -138,7 +140,8 @@ def _get_daily_margin_rates_scraper(start_date: pd.Timestamp, end_date: pd.Times
         
         # If resp is still None or failed after 3 tries, skip this month
         if resp is None or resp.status_code != 200:
-            print(f"       [!] Warning: Failed to fetch margin data for {month_str}")
+            print(f" [!] Warning: Failed to fetch margin data for {month_str}")
+            time.sleep(0.5)
             continue
 
         try:
@@ -146,13 +149,21 @@ def _get_daily_margin_rates_scraper(start_date: pd.Timestamp, end_date: pd.Times
             table = soup.find('table', class_='table table-freeze-col table-bordered table-striped')
             if not table: continue 
 
-            headers_list = [th.text.strip().upper() for th in table.find('thead').find_all('th')]
+            # Check if 'thead' exists before accessing children
+            thead = table.find('thead')
+            if not thead: continue
+            headers_list = [th.text.strip().upper() for th in thead.find_all('th')]
+
             try:
                 date_idx = next(i for i, h in enumerate(headers_list) if 'DATE' in h)
             except StopIteration: continue
 
             is_wide = not any('BENCHMARK' in h for h in headers_list)
-            rows = table.find('tbody').find_all('tr')
+
+            # Check if 'tbody' exists before accessing children
+            tbody = table.find('tbody')
+            if not tbody: continue
+            rows = tbody.find_all('tr')
             
             if is_wide:
                 col_map = {}
@@ -173,7 +184,8 @@ def _get_daily_margin_rates_scraper(start_date: pd.Timestamp, end_date: pd.Times
                             all_data.append({'date': pd.to_datetime(date_str), 'currency': curr, 'rate': rate})
             
         except Exception as e:
-            print(f"       [!] Warning: Error parsing HTML for {month_str}: {e}")
+            print(f" [!] Warning: Error parsing HTML for {month_str}: {e}")
+            time.sleep(0.5)
             continue
             
     if not all_data: return pd.DataFrame()
@@ -228,7 +240,8 @@ def _get_fred_proxy_rates(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
 
             # If resp is still None or failed after 3 tries, skip this month
             if r is None or r.status_code != 200:
-                print(f"       [!] Warning: Failed to fetch FRED data for {currency}")
+                print(f" [!] Warning: Failed to fetch FRED data for {currency}")
+                time.sleep(0.5)
                 continue
 
             series_df = pd.read_csv(io.StringIO(r.text), index_col=0, parse_dates=True, na_values='.')
@@ -243,13 +256,15 @@ def _get_fred_proxy_rates(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
             divisor = 365.0 if currency in CURRENCIES_365 else 360.0
 
             # Looks up specific currency spread, defaults to 'DEFAULT' key
-            spread = MARGIN_SPREADS.get(currency, MARGIN_SPREADS.get('DEFAULT'))
+            default_spread = MARGIN_SPREADS.get('DEFAULT', 0.0)
+            spread = MARGIN_SPREADS.get(currency, default_spread)
 
             daily_rate = (series + spread) / 100.0 / divisor
             proxy_data[currency] = daily_rate
             
         except Exception as e:
-            print(f"       [!] Warning: Error processing FRED data for {currency}: {e}")
+            print(f" [!] Warning: Error processing FRED data for {currency}: {e}")
+            time.sleep(0.5)
             continue
 
     return proxy_data
@@ -274,7 +289,8 @@ def parse_ibkr_rate(rate_str: str, currency: str) -> Optional[float]:
     try:
         val = float(clean)
         divisor = 365.0 if currency in CURRENCIES_365 else 360.0
-        spread = MARGIN_SPREADS.get(currency, MARGIN_SPREADS.get('DEFAULT'))
+        default_spread = MARGIN_SPREADS.get('DEFAULT', 0.0)
+        spread = MARGIN_SPREADS.get(currency, default_spread)
         return (val + spread) / 100.0 / divisor
     except:
         return None

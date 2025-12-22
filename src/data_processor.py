@@ -30,7 +30,7 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: A new data package with adjusted 'initial_state' and 'events'.
     """
-    print("   [>] Applying split adjustments and event processing...")
+    print(" [>] Applying split adjustments and event processing...")
     time.sleep(0.5)
 
     # Unpack and copy to avoid side-effects (modifying the original dict passed by reference)
@@ -48,7 +48,7 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
     
     if mask_prior.any():
         # Step 1: Fix the Timeline
-        print(f"       - Moved {mask_prior.sum()} historical events to start date {report_start.date()}.")
+        print(f"     - Moved {mask_prior.sum()} historical events to start date {report_start.date()}.")
         df_events.loc[mask_prior, 'timestamp'] = report_start
 
         # Step 2: Define the Universe of "Real" Stocks
@@ -61,7 +61,7 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
         ghost_count = ghost_mask.sum()
         
         if ghost_count > 0:
-            print(f"       - Detached symbol from {ghost_count} historical tax events (Ghost Assets).")
+            print(f"     - Detached symbol from {ghost_count} historical tax events (Ghost Assets).")
             df_events.loc[ghost_mask, 'symbol'] = None
 
     # --- 1. Prepare Event Data ---
@@ -145,11 +145,10 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
     split_events = df_events[df_events['split_ratio'] != 1.0]
     if not split_events.empty:
         split_symbols = split_events['symbol'].unique()
-        print(f"       - Detected corporate actions/splits for: {', '.join(split_symbols)}")
+        print(f"     - Detected corporate actions/splits for: {', '.join(split_symbols)}")
     
     # Final Success Message
-    print(f"   [+] Processing complete. Final dataset: {len(df_events)} events.")
-    print()
+    print(f" [+] Processing complete. Final dataset: {len(df_events)} events.")
     time.sleep(0.5)
 
     # Return dict ensuring the structure matches the input 'data_package' exactly

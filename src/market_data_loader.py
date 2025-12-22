@@ -70,15 +70,15 @@ def load_market_data(
     # ======================================================
     # 2. SEQUENTIAL DOWNLOAD
     # ======================================================
-    # Define a lookback window of 5 years to ensure sufficient history for further analyses
-    start_dt = report_start_date - pd.DateOffset(years=5)
+    # Define a lookback window of 1 year to ensure sufficient history for further analyses
+    start_dt = report_start_date - pd.DateOffset(years=1)
     end_dt = report_end_date
     
     market_data_map = {}
     unique_tickers = list(set(symbol_to_ticker.values()))
     
     if unique_tickers:
-        print(f"   [>] Downloading {len(unique_tickers)} tickers sequentially...")
+        print(f"\n [>] Downloading {len(unique_tickers)} tickers sequentially...")
         time.sleep(0.5)
         
         for i, ticker in enumerate(unique_tickers):
@@ -101,7 +101,7 @@ def load_market_data(
                         if attempt < max_retries - 1:
                             raise ValueError("Received empty data")
                         else:
-                            print(f"       [{i+1}/{len(unique_tickers)}] {ticker} NO DATA returned.")
+                            print(f"     [{i+1}/{len(unique_tickers)}] {ticker} NO DATA returned.")
                             break
 
                     # Flatten MultiIndex columns if the provider returns grouped data.  
@@ -137,7 +137,7 @@ def load_market_data(
                             df[cols] = df[cols] / divisor
 
                     # Fill temporal gaps (weekends, holidays) using forward-fill to maintain a continuous daily time series.
-                    df = df.resample('D').ffill().bfill()
+                    df = df.resample('D').ffill()
 
                     # Save the processed DataFrame to the map.
                     # Note: Multiple internal symbols (e.g., specific lots) may map to the same ticker.
@@ -156,18 +156,18 @@ def load_market_data(
                     # Calculate exponential backoff wait time (5s, 10s, 20s).
                     wait_time = 5 * (2 ** attempt) # 5s, 10s...
                     if attempt < max_retries - 1:
-                        print(f"       [!] Issue with {ticker} ({e}). Retrying in {wait_time}s...")
+                        print(f" [!] Issue with {ticker} ({e}). Retrying in {wait_time}s...")
                         time.sleep(wait_time)
                     else:
-                        print(f"       [!] Failed {ticker}: {e}")
+                        print(f" [!] Failed {ticker}: {e}")
+                        time.sleep(0.5)
 
             # Introduce a delay between requests to respect API limits.
             if success:
                 time.sleep(0.5)
 
     if unique_tickers:
-        print(f"   [+] Market data download complete.")
-        print()
-        time.sleep(0.1)
+        print(f" [+] Market data download complete.")
+        time.sleep(0.5)
 
     return market_data_map
