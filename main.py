@@ -44,6 +44,7 @@ CHECKPOINT_FILE = os.path.join(CHECKPOINT_DIR, 'simulation_artifact.pkl')
 
 # Simulation defaults: 150 paths provides a reasonable statistical sample,
 # and a batch size of 50 manages memory usage during vectorised operations.
+SIMULATION_SEED = 42
 DEFAULT_PATHS = 150
 BATCH_SIZE = 50 
 
@@ -376,8 +377,15 @@ class PortfolioSimulationApp:
             # Current batch size is calculated to handle the final remainder correctly
             current_batch_size = min(BATCH_SIZE, n_paths - batch_start)
             
-            # The engine is invoked silently to prevent console clutter
-            scenarios = self.engine.generate_scenario(num_paths=current_batch_size, verbose=False)
+            # Calculate a unique seed for this batch to ensure batch reproducibility
+            batch_seed = SIMULATION_SEED + batch_start
+
+            # The engine is invoked with the specific batch seed
+            scenarios = self.engine.generate_scenario(
+                num_paths=current_batch_size, 
+                verbose=False, 
+                seed=batch_seed
+            )
             
             # Each generated scenario is immediately reconstructed into a NAV series
             for sc in scenarios:

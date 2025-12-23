@@ -54,7 +54,7 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
     df_scraped = _get_daily_margin_rates_scraper(start_date, end_date)
     
     if df_scraped.empty:
-        min_scraped_date = end_date 
+        min_scraped_date = end_date + pd.Timedelta(days=1)
         print(" [!] Warning: IBKR Scraper returned no data. Switching to full FRED backfill.")
         time.sleep(0.5)
     else:
@@ -75,16 +75,19 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
         df_final = df_scraped
 
     # 3. Gap Filling Strategy
-    df_final = df_final.sort_index()
+    # CHANGE: Reindex DATES and COLUMNS first, before filling. 
+    # This ensures completely missing currencies are created as columns so they can be filled with defaults.
     
-    # A. Forward Fill: Fills weekends/holidays
-    df_final = df_final.ffill()
+    # A. Align Date Index (Ensure every day exists)
+    full_date_range = pd.date_range(start_date, end_date, freq='D')
+    df_final = df_final.reindex(full_date_range)
     
-    # B. Backward Fill: The "Safety Net"
-    df_final = df_final.bfill()
-    
-    # 4. Strict Formatting & Filtering
+    # B. Reindex Columns NOW (Create columns for all targets before filling)
     df_final = df_final.reindex(columns=TARGET_CURRENCIES)
+    
+    # C. Fill Gaps
+    # Forward Fill (Primary for weekends) -> Backward Fill (Safety) -> FillNa 0.0 (Dead Safety for missing currencies)
+    df_final = df_final.ffill().bfill().fillna(0.0)
     
     print(" [+] Margin rates loaded successfully.")
     time.sleep(0.5)

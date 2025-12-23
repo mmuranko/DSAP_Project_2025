@@ -111,7 +111,8 @@ def load_market_data(
                     df = df.copy()
 
                     # Remove timezone information and normalize to midnight
-                    df.index = df.index.tz_localize(None).normalize()
+                    # Convert index to DatetimeIndex explicitly before localizing
+                    df.index = pd.to_datetime(df.index).tz_localize(None)
                     
                     # GBp to GBP Fix
                     # London Stock Exchange stocks often quote in Pence (GBp) while portfolios report in Pounds (GBP).
