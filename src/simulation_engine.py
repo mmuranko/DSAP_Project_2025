@@ -318,7 +318,7 @@ class MonteCarloEngine:
                         if is_buy:
                             # Attempt to find a valid asset that actually existed on this date.
                             # Retries are limited to prevent infinite loops on holidays or empty data days.
-                            max_retries = 50
+                            max_retries = 10000
                             found_valid = False
                             
                             for _ in range(max_retries):
@@ -345,48 +345,64 @@ class MonteCarloEngine:
                                 continue # Skip trade entirely if no valid asset found
                                 
                         else:
-                            # --- SELL LOGIC: Random "Retry" Strategy ---
-                            available_assets = [s for s, q in current_holdings.items() if q > 1e-6]
-                            if not available_assets: continue 
-
-                            max_retries = 50
-                            found_valid = False
-
-                            for _ in range(max_retries):
-                                # A. Pick cand
-                                cand_sym = random.choice(available_assets)
-                                cand_qty = current_holdings[cand_sym]
-
-                                # B. Market Data Check
-                                if cand_sym not in self.market_data: continue
-                                cand_price_series = self._get_raw_price(cand_sym, d_naive)
+                            # --- SELL LOGIC: Deterministic Filter ---
+                            # 1. Identify all candidates first (Scan the portfolio once)
+                            candidates = []
+                            
+                            for sym, qty in current_holdings.items():
+                                if qty <= 1e-6: continue
+                                
+                                # Fast Data Check
+                                if sym not in self.market_data: continue
+                                
+                                # Check price
+                                cand_price_series = self._get_raw_price(sym, d_naive)
                                 cand_price = float(cand_price_series)
                                 if cand_price <= 0: continue
 
-                                # C. Math & Validation
+                                # Optimization: Skip if value is clearly too low (< 50% of target)
+                                # to save on expensive FX calls for "dust" positions.
+                                if (qty * cand_price) < (orig_val * 0.5): 
+                                    continue
+
+                                candidates.append(sym)
+
+                            # 2. Detailed Validation on Candidates
+                            valid_matches = []
+                            
+                            for cand_sym in candidates:
+                                cand_qty = current_holdings[cand_sym]
                                 cand_currency = self.sym_curr_map.get(cand_sym, self.base_currency)
+                                cand_price = float(self._get_raw_price(cand_sym, d_naive))
+
+                                # FX Calculations
+                                # FX: Trade -> Candidate (For Quantity Calculation)
+                                fx_trade_to_cand = self._get_fx_rate(row['currency'], cand_currency, d_naive)
+                                # FX: Candidate -> Trade (For Fee Check)
                                 fx_cand_to_trade = self._get_fx_rate(cand_currency, row['currency'], d_naive)
 
-                                # Calculate required shares of candidate to match orig_val
-                                target_val_in_cand_currency = (orig_val * fx_cand_to_trade)
+                                # Exact Quantity Needed
+                                target_val_in_cand_currency = orig_val * fx_trade_to_cand
                                 req_qty = target_val_in_cand_currency / cand_price
 
-                                # Check 1: Liquidity (Do we have enough?)
-                                if req_qty > cand_qty: continue
-
-                                # Check 2: Viability (Does fee kill the trade?)
+                                # Check 1: Do we have enough?
+                                if req_qty > cand_qty: continue 
+                                
+                                # Check 2: Are fees acceptable?
                                 cand_exch = self.sym_exchange_map.get(cand_sym, 'DEFAULT')
                                 cand_rule = self.FEE_SCHEDULE.get(cand_exch, self.FEE_SCHEDULE['DEFAULT'])
                                 cand_fee_in_trade_curr = cand_rule['fee'] * fx_cand_to_trade
                                 
-                                if cand_fee_in_trade_curr >= (orig_val * 0.9): 
-                                    continue # Fee is too high for this trade size.
+                                if cand_fee_in_trade_curr < (orig_val * 0.9):
+                                    valid_matches.append(cand_sym)
 
-                                new_symbol = cand_sym
-                                found_valid = True
-                                break
-                            
-                            if not found_valid: continue
+                            # 3. Final Selection
+                            if valid_matches:
+                                # Pick any valid candidate randomly
+                                new_symbol = random.choice(valid_matches)
+                            else:
+                                 # If no match found (really unlikely), skip trade
+                                 continue
 
                     # Safety Check: If new_symbol is still None, skip processing
                     if new_symbol is None:
@@ -410,14 +426,25 @@ class MonteCarloEngine:
                              actual_cost = new_qty * raw_price * (1 + rule['tax_buy']) + rule['fee']
                              cash_impact = -1 * actual_cost
                         else:
+                             new_qty = 0
                              cash_impact = 0
                     else:
-                        # For TRADE_SELL, calculate proceeds based on current simulation holding.
-                        current_qty = current_holdings.get(new_symbol, 0)
-                        # Determine the nominal percentage of the portfolio to sell based on the original trade value.
-                        nominal_qty = available_cash_new_curr / raw_price
-                        qty_to_sell = min(nominal_qty, current_qty)
+                        # --- EXECUTE SELL ---
+                        # Mirroring the validation logic: We sell the specific quantity required 
+                        # to match the gross monetary value of the original trade.
                         
+                        # Calculate exact shares needed to raise 'available_cash_new_curr'
+                        qty_to_sell = available_cash_new_curr / raw_price
+                        
+                        # Retrieve current holdings
+                        current_qty = current_holdings.get(new_symbol, 0)
+
+                        # Floating Point Safety: 
+                        # The validation loop guarantees (qty_to_sell <= current_qty).
+                        # However, we cap at current_qty to prevent negative holdings due to precision errors.
+                        if qty_to_sell > current_qty:
+                            qty_to_sell = current_qty
+
                         if qty_to_sell > 0:
                              net_proceeds = self._calculate_sell_proceeds(new_symbol, qty_to_sell, raw_price)
                              new_qty = -1 * qty_to_sell

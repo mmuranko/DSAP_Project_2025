@@ -140,6 +140,27 @@ def load_market_data(
                     # Fill temporal gaps (weekends, holidays) using forward-fill to maintain a continuous daily time series.
                     df = df.resample('D').ffill()
 
+                    # Problem: If data starts on Jan 3rd (post-holiday), Jan 1-2 remain NaN.
+                    # Solution: If the data start is within 5 days of the requested 'start_dt', 
+                    #           we assume it's a holiday/weekend gap and backfill it.
+                    #           If the gap is larger (e.g., months), we assume the asset didn't exist yet.
+                    
+                    if not df.empty:
+                        first_valid_dt = df.index.min()
+                        # Calculate gap between requested start and actual data start
+                        gap_days = (first_valid_dt - start_dt).days
+                        
+                        # Threshold: 5 days covers a long weekend + New Year's holiday
+                        if 0 < gap_days <= 5:
+                            # 1. Reindex to force the DataFrame to start at 'start_dt'
+                            #    This creates the rows for Jan 1, Jan 2, etc. with NaN values.
+                            full_idx = pd.date_range(start=start_dt, end=df.index.max(), freq='D')
+                            df = df.reindex(full_idx)
+                            
+                            # 2. Backfill ONLY these newly created limited gaps
+                            #    limit=6 ensures we don't accidentally fill a massive gap if logic fails
+                            df.bfill(limit=6, inplace=True)
+
                     # Save the processed DataFrame to the map.
                     # Note: Multiple internal symbols (e.g., specific lots) may map to the same ticker.
                     symbols = [k for k, v in symbol_to_ticker.items() if v == ticker]
