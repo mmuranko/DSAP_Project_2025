@@ -37,7 +37,11 @@ from src.portfolio_analytics import PortfolioAnalyser
 
 # --- Configuration Constants ---
 # Default input path used if file selection is skipped.
-DEFAULT_REPORT_PATH = r'data\U13271915_20250101_20251224.csv'
+# Directory containing raw input reports
+DATA_DIR = r'data' 
+
+# Default input path used if file selection is skipped.
+DEFAULT_REPORT_PATH = r'data\U13271915_20241224_20251224.csv'
 
 # Directory for persistent application state storage (pickled sessions).
 CHECKPOINT_DIR = r'data/saved_states'
@@ -154,7 +158,7 @@ class PortfolioSimulationApp:
     # =========================================================================
     def step_load_data(self) -> None:
         """
-        Execute Step 1: Ingest raw IBKR activity report.
+        Ingests the raw IBKR activity report.
 
         Parses CSV, applies split adjustments, and isolates capital flow events 
         (deposits/withdrawals). Invalidates downstream data to prevent state 
@@ -162,7 +166,7 @@ class PortfolioSimulationApp:
         """
         self._print_section_header("STEP 1: DATA LOADING")
 
-        # Invalidate downstream components to force recalculation.
+        # Invalidates downstream components to force recalculation.
         self.market_data = None
         self.daily_rates = None
         self.engine = None
@@ -172,55 +176,97 @@ class PortfolioSimulationApp:
         self.real_nav = None
         self.simulation_results = None
 
-        # Prompt for IBKR report CSV file path.
-        path = input(f" >> Enter path to CSV [Default: {DEFAULT_REPORT_PATH}]: ").strip()
-        time.sleep(0.5)
-        
-        # Use default path if input is empty.
-        if not path:
-            path = DEFAULT_REPORT_PATH
+        # --- File Selection Logic ---
+        files = []
+        if os.path.exists(DATA_DIR):
+            files = [f for f in os.listdir(DATA_DIR) if f.lower().endswith('.csv')]
+            # Sorts by modification time (newest first).
+            files.sort(key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)), reverse=True)
 
-        # Verify file existence.
+        path = None
+
+        if files:
+            # Loop until a valid selection is made
+            while True:
+                print(f"\n Available Reports in '{DATA_DIR}':")
+                print("   [0] Manual Path Entry")
+                for idx, f in enumerate(files):
+                    print(f"   [{idx+1}] {f}")
+                
+                choice = input("\n >> Select file number [Default: 1]: ").strip()
+                time.sleep(0.5)
+
+                if not choice:
+                    # Default to the newest file
+                    path = os.path.join(DATA_DIR, files[0])
+                    break # Exit loop
+                elif choice == '0':
+                    path = None # Trigger manual entry logic below
+                    break # Exit loop
+                else:
+                    try:
+                        file_idx = int(choice) - 1
+                        if 0 <= file_idx < len(files):
+                            path = os.path.join(DATA_DIR, files[file_idx])
+                            break # Exit loop
+                        else:
+                            print(" [!] Number out of range. Please try again.")
+                            time.sleep(1)
+                    except ValueError:
+                        print(" [!] Invalid input. Please enter a number.")
+                        time.sleep(1)
+
+        # Fallback: Manual Entry (if no files found or user selected 0)
+        if path is None:
+            path = input(f" >> Enter path to CSV [Default: {DEFAULT_REPORT_PATH}]: ").strip()
+            time.sleep(0.5)
+            # Use default path if input is empty.
+            if not path:
+                path = DEFAULT_REPORT_PATH
+
+        print(f" [>] Loading: {path}")
+
+        # Verifies file existence.
         if not os.path.exists(path):
             print(f" [!] Error: File not found at {path}")
             time.sleep(0.5)
             return
 
-        # Store filename for results directory naming.
+        # Stores filename for output directory naming.
         self.report_name = os.path.basename(path)
 
-        # Parse raw IBKR CSV report into structured DataFrame.
+        # Parses raw IBKR CSV into structured DataFrame.
         self.raw_data = dl.load_ibkr_report(path)
 
         if self.raw_data is not None:
-            # Apply stock split adjustments to historic holding quantities.
+            # Applies stock split adjustments to historical holdings.
             self.clean_data = dp.apply_split_adjustments(self.raw_data)
         else:
             print(" [!] Data load failed.")
             time.sleep(0.5)
             return
 
-        # Extract events DataFrame safely.
+        # Extracts events DataFrame safely.
         events_df = self.clean_data.get('events') if self.clean_data is not None else None
 
-        # Process capital flows or initialize empty structures if no events exist.
+        # Processes capital flows or initializes empty structures.
         if events_df is None or events_df.empty:
             self.flow_events_df = pd.DataFrame(columns=['timestamp', 'event_type', 'cash_change_native', 'currency'])
             self.flow_series = pd.Series(dtype=float)
         else:
-            # Validate schema.
+            # Validates schema.
             required_cols = {'cash_change_native', 'event_type', 'timestamp'}
             if not required_cols.issubset(events_df.columns):
                 raise KeyError(f"events DataFrame must contain columns: {required_cols}")
 
-            # Filter DEPOSIT and WITHDRAWAL events; normalize timestamps.
+            # Filters DEPOSIT and WITHDRAWAL events; normalizes timestamps.
             flows = events_df[events_df['event_type'].isin(['DEPOSIT', 'WITHDRAWAL'])].copy()
             flows['timestamp'] = pd.to_datetime(flows['timestamp']).dt.normalize()
 
-            # Retain filtered event-level DataFrame for traceability.
+            # Retains filtered event-level DataFrame for traceability.
             self.flow_events_df = flows
 
-            # Aggregate daily net flows (amounts assumed in base currency).
+            # Aggregates daily net flows (amounts assumed in Base Currency).
             self.flow_series = flows.groupby('timestamp')['cash_change_native'].sum().sort_index()
 
     # =========================================================================

@@ -18,14 +18,14 @@ from .config import RISK_FREE_RATE
 
 # Global plot configuration
 plt.rcParams.update({
-    'font.family': 'serif',
-    'font.size': 12,
+    'font.family': 'sans-serif',
+    'font.size': 13,
     'axes.titlesize': 16,
     'axes.titleweight': 'bold',
     'axes.labelsize': 14,
-    'xtick.labelsize': 12,
-    'ytick.labelsize': 12,
-    'legend.fontsize': 12,
+    'xtick.labelsize': 13,
+    'ytick.labelsize': 13,
+    'legend.fontsize': 13,
     'figure.titlesize': 18
 })
 
@@ -230,18 +230,18 @@ class PortfolioAnalyser:
         p75 = self.sims.quantile(0.75, axis=1)
         p25 = self.sims.quantile(0.25, axis=1)
         
+        # Renders control and actual portfolio
+        plt.plot(self.real, color='red', linewidth=2, label='Real Portfolio')
+        plt.plot(self.control, color='blue', linewidth=1.5, linestyle='-.', label='Control Portfolio')
+
         # Renders confidence bands
         plt.fill_between(self.sims.index, p05, p95, color='gray', alpha=0.15, label='90% Confidence Interval')
         plt.fill_between(self.sims.index, p25, p75, color='gray', alpha=0.30, label='50% Confidence Interval')
         plt.plot(median, color='gray', linestyle='--', alpha=0.6, label='Median Simulated Portfolio')
         
-        # Renders control and actual portfolio
-        plt.plot(self.control, color='blue', linewidth=1.5, linestyle='-.', label='Control Portfolio')
-        plt.plot(self.real, color='red', linewidth=2, label='Real Portfolio')
-        
-        plt.title('Monte Carlo Analysis: Confidence Intervals')
+        # plt.title('Monte Carlo Analysis: Confidence Intervals')
         plt.ylabel('Net Asset Value [CHF]')
-        plt.legend(loc='upper left')
+        plt.legend(loc='upper left', framealpha=1.0, facecolor='white')
         plt.grid(True, alpha=0.3)
         plt.xlim(self.sims.index[0], self.sims.index[-1])
         plt.tight_layout()
@@ -266,13 +266,13 @@ class PortfolioAnalyser:
         
         cols_to_plot = self.sims.columns[:min(len(self.sims.columns), num_paths)]
         plt.plot(self.sims[cols_to_plot], color='gray', linewidth=0.5, alpha=0.2)
-        
-        plt.plot(self.control, color='blue', linewidth=2, label='Control Portfolio')
+
         plt.plot(self.real, color='red', linewidth=2.5, label='Real Portfolio')
+        plt.plot(self.control, color='blue', linewidth=2, label='Control Portfolio')
         
-        plt.title(f'Monte Carlo Trace Analysis ({len(cols_to_plot)} paths)')
+        # plt.title(f'Monte Carlo Trace Analysis ({len(cols_to_plot)} paths)')
         plt.ylabel('Net Asset Value [CHF]')
-        plt.legend()
+        plt.legend(framealpha=1.0, facecolor='white')
         plt.grid(True, alpha=0.3)
         plt.xlim(self.sims.index[0], self.sims.index[-1])
         plt.tight_layout()
@@ -306,17 +306,17 @@ class PortfolioAnalyser:
         # Computes median NAV path first, then derives wealth index
         median_sim_nav = self.sims.median(axis=1)
         dd_sim = _get_dd(median_sim_nav)
-        
-        plt.plot(dd_sim, color='gray', linestyle=':', linewidth=1.5, label='Median Simulated Portfolio Drawdown')
-        plt.fill_between(dd_sim.index, dd_sim, 0, color='gray', alpha=0.1)
 
-        plt.plot(dd_real, color='red', linewidth=2, label='Real Portfolio Drawdown')
-        plt.plot(dd_control, color='blue', linestyle='--', linewidth=1.5, label='Control Portfolio Drawdown')
+        plt.plot(dd_real, color='red', linewidth=2, label='Real Portfolio')
+        plt.plot(dd_control, color='blue', linestyle='--', linewidth=1.5, label='Control Portfolio')
         plt.fill_between(dd_real.index, dd_real, 0, color='red', alpha=0.1)
         
+        plt.plot(dd_sim, color='gray', linestyle=':', linewidth=1.5, label='Median Simulated Portfolio')
+        plt.fill_between(dd_sim.index, dd_sim, 0, color='gray', alpha=0.1)
+
         plt.title('Portfolio Drawdown Profile')
         plt.ylabel('Drawdown [%]')
-        plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+        plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0, symbol=''))
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.xlim(self.sims.index[0], self.sims.index[-1])
@@ -335,13 +335,16 @@ class PortfolioAnalyser:
 
         mean_val = sim_raw_stats['Final_NAV'].mean()
 
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Final_NAV'])
+        # Reduced target_ticks to 5 to prevent label overlap on large currency values
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Final_NAV'], target_ticks=5)
         
         sns.histplot(data=sim_raw_stats, x='Final_NAV', bins=bins, kde=True, ax=ax, color='skyblue')
         self._add_lines(ax, self.real.iloc[-1], self.control.iloc[-1], mean_val)
         
         ax.set_xlabel("Net Asset Value [CHF]")
         ax.set_ylabel("Count")
+        
+        # Apply the calculated stride
         ax.set_xticks(bins[::stride])
         ax.xaxis.set_major_formatter(mtick.StrMethodFormatter('{x:,.0f}'))
 
@@ -449,45 +452,46 @@ class PortfolioAnalyser:
 
     def _add_lines(self, ax: Axes, real_val: float, control_val: float, mean_val: float) -> None:
         """Adds vertical reference lines to histograms."""
-        ax.axvline(real_val, color='red', linestyle='-', linewidth=2, label='Real')
-        ax.axvline(control_val, color='blue', linestyle='--', linewidth=2, label='Control')
-        ax.axvline(mean_val, color='black', linestyle=':', linewidth=2, label='Average') 
+        ax.axvline(real_val, color='red', linestyle='-', linewidth=2, label='Real Portfolio')
+        ax.axvline(control_val, color='blue', linestyle='--', linewidth=2, label='Control Portfolio')
+        ax.axvline(mean_val, color='black', linestyle=':', linewidth=2, label='Distribution Mean') 
         ax.legend(loc='upper right', framealpha=1.0, facecolor='white')
 
     def _get_dynamic_bins_and_stride(self, data: pd.Series, target_bins: int = 40, target_ticks: int = 8) -> tuple[np.ndarray, int]:
         """
-        Calculates optimal histogram bin edges and tick stride for x-axis labelling.
-        Dynamically adapts to the data range using standard 1-2-5 intervals.
+        Calculates optimal histogram bin edges and tick stride.
+        Ensures ticks fall on nice integers (multiples of 1, 2, 5, 10).
         """
         val_range = data.max() - data.min()
+        if val_range <= 0: 
+            val_range = abs(data.mean()) * 0.1 if abs(data.mean()) > 1e-9 else 1.0
 
-        # Handles edge cases where variance is zero or negligible
-        if val_range <= 0: val_range = abs(data.mean()) * 0.1 
-        if val_range == 0: val_range = 1.0
-            
-        # 1. Estimates raw step size required to achieve the target bin count
-        raw_step = val_range / target_bins
-            
-        # 2. Rounds step size to nearest standard interval (1, 2, 2.5, 5, 10)
-        magnitude = 10 ** np.floor(np.log10(raw_step))
-        residual = raw_step / magnitude
-            
-        if residual <= 1.0: nice_step = 1.0 * magnitude
-        elif residual <= 2.0: nice_step = 2.0 * magnitude
-        elif residual <= 2.5: nice_step = 2.5 * magnitude
-        elif residual <= 5.0: nice_step = 5.0 * magnitude
-        else: nice_step = 10.0 * magnitude
-            
-        # 3. Generates bins
-        if nice_step <= 0: 
-            bins = np.array([data.min(), data.max()])
-        else:
-            lower = np.floor(data.min() / nice_step) * nice_step
-            upper = np.ceil(data.max() / nice_step) * nice_step
-            bins = np.arange(lower, upper + nice_step + (nice_step/1000), nice_step)
-            
-        # 4. Calculates Stride to maintain clean x-axis visualisation
-        total_bins = len(bins)
-        stride = max(1, total_bins // target_ticks)
+        # 1. Determine "Nice" Tick Interval
+        raw_tick_step = val_range / target_ticks
+        magnitude = 10 ** np.floor(np.log10(raw_tick_step))
+        residual = raw_tick_step / magnitude
+        
+        if residual <= 1.5: nice_mult = 1.0
+        elif residual <= 3.5: nice_mult = 2.0
+        elif residual <= 7.5: nice_mult = 5.0
+        else: nice_mult = 10.0
+        
+        tick_step = nice_mult * magnitude
+        
+        # 2. Determine Stride (Bins per Tick) to match target_bins count
+        approx_stride = tick_step / (val_range / target_bins)
+        valid_strides = np.array([1, 2, 4, 5, 10, 20])
+        stride = int(valid_strides[np.argmin(np.abs(valid_strides - approx_stride))])
+        
+        # 3. Generate Bins aligned to the Tick Grid
+        bin_step = tick_step / stride
+        lower_bound = np.floor(data.min() / tick_step) * tick_step
+        upper_bound = np.ceil(data.max() / tick_step) * tick_step
+        
+        bins = np.arange(lower_bound, upper_bound + (bin_step * 0.5), bin_step)
+        
+        # Ensure max value is covered
+        if bins[-1] < data.max():
+             bins = np.concatenate([bins, [bins[-1] + bin_step]])
             
         return bins, stride
