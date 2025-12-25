@@ -1,4 +1,4 @@
-# AI Tools Usage Declaration
+# AI Usage Summary
 
 ## Overview
 This document outlines the usage of Artificial Intelligence tools (Google Gemini and ChatGPT) in the development of the **Portfolio Reconstruction & Monte Carlo Engine**.
@@ -19,5 +19,7 @@ I certify that:
 2.  I fully understand the logic and functionality of every module.
 3.  The core concepts and analytical conclusions are entirely my own work.
 
-**Student Name:** Marvin Muranko
-**Date:** December 2025
+**Author:** Marvin Muranko
+**Student ID:** 21955182
+**Course:** Advanced Programming 2025
+**Date:** January 11, 2026

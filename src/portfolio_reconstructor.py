@@ -47,11 +47,11 @@ def reconstruct_portfolio(
     start_date = data_package['report_start_date'].normalize()
     end_date = data_package['report_end_date'].normalize()
 
-    # We create a NEW column called 'date'. 
+    # A new column called 'date' is created
     # Example: "2025-02-14 10:45:03" becomes "2025-02-14 00:00:00"
     df_events['date'] = df_events['timestamp'].dt.normalize()
 
-    # Create the master timeline (Rows for our final matrix)
+    # Create the master timeline (Rows for the final matrix)
     # Use inclusive='left' to match the simulation engine's logic. This ensures
     # the reconstruction stops on the true last day of the report.
     all_dates = pd.date_range(start=start_date, end=end_date, freq='D', inclusive='left')
@@ -61,8 +61,8 @@ def reconstruct_portfolio(
     # ==========================================
 
     # 1. Aggregate Cash Flows
-    # We sum 'cash_change_native' because it captures ALL money movement (Trades, Dividends, Fees)
-    # We group by 'currency' (columns) and 'date' (index).
+    # 'cash_change_native' is summed because it captures ALL money movement (Trades, Dividends, Fees)
+    # It is grouped by 'currency' (columns) and 'date' (index).
     cash_activity = df_events.groupby(['date', 'currency'])['cash_change_native'].sum()
 
     # 2. Pivot to Wide Format
@@ -70,22 +70,22 @@ def reconstruct_portfolio(
     df_cash_changes = cash_activity.unstack(fill_value=0)
 
     # 3. Reindex to Master Timeline
-    # This ensures we have a row for every single day (filling gaps with 0 change)
+    # This ensures that there is a row for every single day (filling gaps with 0 change)
     df_cash_changes = df_cash_changes.reindex(all_dates, fill_value=0)
 
     # 4. Add Initial Cash State
-    # We look for rows in initial_state where asset_category is 'Cash'
+    # Rows in initial_state where asset_category is 'Cash' are picked
     initial_cash = df_initial[df_initial['asset_category'] == 'Cash']
 
     for _, row in initial_cash.iterrows():
         curr = row['currency']
         qty = row['quantity'] # In initial_state, 'quantity' holds the cash balance
-        
+
         # Safety check: If we hold a currency (e.g. JPY) but never traded it, 
         # it won't be in df_cash_changes columns yet. We create it.
         if curr not in df_cash_changes.columns:
             df_cash_changes[curr] = 0.0
-        
+
         # Add the starting balance to the VERY FIRST day
         # This acts as a "Deposit" at the beginning of time
         df_cash_changes.loc[start_date, curr] += qty
@@ -98,7 +98,7 @@ def reconstruct_portfolio(
     # ==========================================
 
     # 1. Aggregate Security Flows
-    # We sum 'quantity_change' grouped by 'symbol' and 'date'.
+    # 'quantity_change' is summed, grouped by 'symbol' and 'date'.
     security_activity = df_events.groupby(['date', 'symbol'])['quantity_change'].sum()
 
     # 2. Pivot to Wide Format
@@ -114,7 +114,7 @@ def reconstruct_portfolio(
     for _, row in initial_stocks.iterrows():
         sym = row['symbol']
         qty = row['quantity']
-        
+
         # Safety check: If we hold a stock but never traded it in this period,
         # it won't be in the columns yet. We create it.
         if sym not in df_security_changes.columns:
@@ -148,14 +148,14 @@ def reconstruct_portfolio(
     cols_overlap = df_daily_security_balance.columns.intersection(df_daily_cash_balance.columns)
 
     if not cols_overlap.empty:
-        # Drop them from the Security DataFrame so they don't duplicate the Cash DataFrame columns
+        # Drop them from the Security DataFrame so they do not duplicate the cash DataFrame columns
         df_security_clean = df_daily_security_balance.drop(columns=cols_overlap)
     else:
         df_security_clean = df_daily_security_balance
 
 
     # 2. Merge
-    # Now we are safe to concat. Cash columns come purely from the Cash Engine.
+    # Now security df and cash df can be safely concat.
     df_holdings = pd.concat([df_security_clean, df_daily_cash_balance], axis=1).fillna(0)
 
 
@@ -171,8 +171,7 @@ def reconstruct_portfolio(
     # df_prices = pd.DataFrame(1.0, index=df_holdings.index, columns=df_holdings.columns)
     # Initialize with NaN to catch missing data.
     df_prices = pd.DataFrame(np.nan, index=df_holdings.index, columns=df_holdings.columns)
-    # However, Cash is always worth 1.0 in its native currency.
-    # We must explicitly set cash columns to 1.0.
+    # The cash columns must be set to 1.0.
     for col in df_daily_cash_balance.columns:
         if col in df_prices.columns:
             df_prices[col] = 1.0
@@ -181,32 +180,25 @@ def reconstruct_portfolio(
 
 
     # 2. Fill Price Matrix (P)
-    # We only update columns that are SECURITIES (Stocks). 
+    # Only columns that are securities are updated. 
     for col in df_holdings.columns:
         # If this column is a Cash Account (e.g. 'USD'), its "Native Price" is 1.0.
-        # We skip looking it up in market_data_map to avoid double-counting FX rates.
         if col in df_daily_cash_balance.columns:
             continue 
 
         if col in market_data_map:
-            # It's a Security
+            # It is a Security
             prices = market_data_map[col]
             price_series = prices['Close']
             
             # --- GAP FILLING STRATEGY ---
-            # 1. Reindex to Master Timeline (introduces NaNs for weekends/holidays/missing dates)
+            # 1. Reindex to Master Timeline: introduces NaNs for weekends/holidays/missing dates
             aligned_prices = price_series.reindex(df_holdings.index)
             
-            # 2. Forward Fill (ffill): "Today's price is yesterday's closing price"
-            # Handles weekends and holidays perfectly.
+            # 2. Forward Fill (ffill): Handles weekends and holidays
             aligned_prices = aligned_prices.ffill()
-            
-            # 3. Backward Fill (bfill): "If we have no past price, assume the first future price applies retroactively"
-            # Handles assets that start trading mid-report or have missing initial data (like SPY5).
-            # aligned_prices = aligned_prices.bfill()
-            # Backward Fill REMOVED. We no longer assume prices exist before the data start date.
 
-            # Assign to Matrix
+            # Assign to matrix
             df_prices[col] = aligned_prices
         else:
             # ERROR: Stock exists in portfolio but no market data found.
@@ -219,14 +211,13 @@ def reconstruct_portfolio(
     # STEP 6: CONSTRUCT EXCHANGE RATE MATRIX
     # ==========================================
 
-    # Logic: For every asset in our holdings, find the multiplier to convert 
-    # its Native Value -> Base Value.
+    # For every asset in the holdings, find the multiplier to convert its native value to base value.
     base_currency = data_package['base_currency']
 
     # Since it contains both Stocks and Cash rows, it maps every asset to its currency.
     asset_currency_map = df_initial.set_index('symbol')['currency'].to_dict()
 
-    # 2. Iterate through every asset in our Holdings Matrix
+    # 2. Iterate through every asset in the holdings matrix
     for col in df_holdings.columns:
         
         # A. Find the Currency of this asset
@@ -250,10 +241,10 @@ def reconstruct_portfolio(
         rate_series = None
         
         if fx_ticker in market_data_map:
-            # We have the direct rate
+            # For the direct rate
             rate_series = market_data_map[fx_ticker]['Close']
         elif inv_ticker in market_data_map:
-            # We have the inverse rate -> Calculate Reciprocal
+            # For the inverse rate -> Calculate Reciprocal
             rate_series = 1.0 / market_data_map[inv_ticker]['Close']
             
         # E. Align and Assign
@@ -294,7 +285,6 @@ def reconstruct_portfolio(
     # STEP 8: FINAL CLEANUP (Rounding)
     # ==========================================
     # Fixes floating point artifacts (e.g. -9.03e-13 becomes 0.0)
-    # We apply this to all output tables to ensure Excel reports are clean.
     rounding_decimals = 5
     
     df_holdings = df_holdings.round(rounding_decimals)

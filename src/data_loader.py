@@ -1,18 +1,17 @@
 """
 IBKR Activity Report Parser.
 
-This module handles the ingestion and transformation of Interactive Brokers (IBKR)
-Activity Flex Queries (CSV format). It parses the "stacked" CSV structure—where
-multiple distinct tables exist within one file—and normalizes the data into a
-coherent financial timeline.
+Handles ingestion and transformation of Interactive Brokers (IBKR) Activity Flex
+Queries (CSV format). Parses the "stacked" CSV structure—where multiple distinct
+tables exist within one file—and normalizes the data into a coherent financial
+timeline.
 
-The core output is a 'Data Package' containing:
-1. Initial State: A snapshot of the portfolio at the report's start date.
-2. Event Log: A chronological sequence of all trades, dividends, fees, and corporate actions.
+Outputs a 'Data Package' containing:
+1. Initial State: Portfolio snapshot at report start date.
+2. Event Log: Chronological sequence of trades, dividends, fees, and corporate actions.
 3. Metadata: Financial instrument details and report period boundaries.
 
-This module serves as the ETL (Extract, Transform, Load) layer for the
-simulation engine.
+Acts as the ETL (Extract, Transform, Load) layer for the simulation engine.
 """
 import pandas as pd
 import re
@@ -26,8 +25,7 @@ def _get_section(df_raw: pd.DataFrame, section_name: str) -> Optional[pd.DataFra
     """
     Extracts a specific sub-table from the stacked IBKR CSV based on section headers.
 
-    The IBKR CSV format stacks multiple tables vertically. This function locates
-    the specific header row for a given section (e.g., 'Trades', 'Open Positions'),
+    Locates the specific header row for a given section (e.g., 'Trades', 'Open Positions'),
     extracts the subsequent data rows, cleans empty columns, and resets the index.
 
     Args:
@@ -35,21 +33,20 @@ def _get_section(df_raw: pd.DataFrame, section_name: str) -> Optional[pd.DataFra
         section_name (str): The specific section title to extract (column 0 in raw data).
 
     Returns:
-        Optional[pd.DataFrame]: A clean DataFrame of the requested section, or None 
-        if the section does not exist or parsing fails.
+        Optional[pd.DataFrame]: Clean DataFrame of the requested section, or None 
+        if section does not exist or parsing fails.
     """
     try:
-        # Advanced Indexing: The CSV is "stacked", meaning different tables appear vertically.
-        # We locate the specific row index where column 0 matches the section name 
+        # Locates the specific row index where column 0 matches the section name 
         # and column 1 identifies it as the 'Header' row.
         header_row_index = df_raw[
             (df_raw[0] == section_name) & (df_raw[1] == 'Header')
         ].index[0]
         
-        # Extract the header row values to use as column names for the new DataFrame
+        # Extracts header row values to use as column names for the new DataFrame.
         column_names = df_raw.iloc[header_row_index].values
 
-        # Boolean Masking: Filter for rows belonging to this section tagged as 'Data'
+        # Filters for rows belonging to this section tagged as 'Data'.
         data_rows = df_raw[
             (df_raw[0] == section_name) & (df_raw[1] == 'Data')
         ]
@@ -57,11 +54,11 @@ def _get_section(df_raw: pd.DataFrame, section_name: str) -> Optional[pd.DataFra
         df_section = pd.DataFrame(data_rows.values, columns=column_names)
         
         # Data Cleaning: 
-        # 1. dropna(axis=1, how='all') removes columns that are purely empty (often spacer cols).
+        # 1. dropna(axis=1, how='all') removes columns that are purely empty (spacer cols).
         # 2. reset_index drops the original CSV row numbers to create a clean 0..n index.
         df_section = df_section.dropna(axis=1, how='all').reset_index(drop=True)
         
-        # Slicing: Return all rows, but skip the first two columns (metadata columns)
+        # Returns all rows, but skips the first two columns (metadata columns).
         return df_section.iloc[:, 2:]
         
     except IndexError:
@@ -73,55 +70,48 @@ def _get_section(df_raw: pd.DataFrame, section_name: str) -> Optional[pd.DataFra
 
 def _clean_symbol(symbol: Any) -> Optional[str]:
     """
-    Standardises ticker symbols by removing descriptions and validating formatting.
+    Standardizes ticker symbols by removing descriptions and validating formatting.
 
-    Handles IBKR specific quirks, such as symbols formatted as "SYMB(Description)".
-    It preserves dot-notation tickers (e.g., 'BRK.B') but attempts to filter out
-    invalid or malformed entries.
+    Handles IBKR quirks, such as symbols formatted as "SYMB(Description)".
+    Preserves dot-notation tickers (e.g., 'BRK.B') but filters out invalid entries.
 
     Args:
         symbol (Any): The raw symbol input (usually a string or NaN).
 
     Returns:
-        Optional[str]: The cleaned ticker string, or None if the input was invalid/empty.
+        Optional[str]: Cleaned ticker string, or None if input was invalid/empty.
     """
     if pd.isna(symbol) or symbol == '':
         return None
     
     s = str(symbol).strip()
     
-    # Fix: IBKR sometimes outputs "SYMB(Description)" in certain sections.
-    # We split on '(' and take the first part.
+    # IBKR outputs "SYMB(Description)" in certain sections.
+    # Splits on '(' and keeps the preceding part.
     if '(' in s:
         s = s.split('(')[0].strip()
-        
-    # REMOVED: The check "if '.' in s: return None"
-    # This allows valid tickers like "BRK.B" or "BF.B" to pass through.
     
     if s and s[-1].islower() and not '.' in s:
-        # Heuristic: If it ends in lowercase without a dot, it might be a stray char
-        # But be careful with this. Ideally, trust the source.
+        # Heuristic: If string ends in lowercase without a dot, treat as stray char.
         return s[:-1]
         
     return s
 
 def _clean_number(series: pd.Series) -> pd.Series:
     """
-    Performs vectorized string cleaning to convert currency strings to floats.
+    Converts currency strings to floats using vectorized operations.
 
-    Specifically handles the removal of thousands separators (commas) which are
-    standard in US-formatted CSVs, and coerces errors (non-numeric strings) to NaN 
-    before filling them with 0.
+    Handles removal of thousands separators (commas) and coerces errors 
+    (non-numeric strings) to NaN before filling with 0.
 
     Args:
-        series (pd.Series): A pandas Series containing string representations of numbers.
+        series (pd.Series): Pandas Series containing string representations of numbers.
 
     Returns:
-        pd.Series: A numeric pandas Series.
+        pd.Series: Numeric pandas Series.
     """
-    # Vectorisation: Instead of looping through rows, we use the .str accessor.
-    # This pushes the string replacement operation to the underlying C array, significantly increasing speed.
-    # 'errors="coerce"' transforms unparseable strings into NaN instead of raising an error.
+    # Uses .str accessor for vectorization instead of row looping.
+    # 'errors="coerce"' transforms unparseable strings into NaN.
     return pd.to_numeric(
         series.astype(str).str.replace(',', '', regex=False), 
         errors='coerce'
@@ -136,20 +126,20 @@ def parse_initial_state(
     master_symbol_set: Set[str]
 ) -> pd.DataFrame:
     """
-    Builds the portfolio snapshot as it existed at the start of the report period.
+    Constructs the portfolio snapshot as it existed at the start of the report period.
 
-    Uses the 'Mark-to-Market Performance Summary' section of the report to determine
-    prior quantities and prices. It validates assets against the master symbol set
-    to ensure only relevant (traded or held) assets are included.
+    Uses 'Mark-to-Market Performance Summary' to determine prior quantities and prices.
+    Validates assets against the master symbol set to ensure inclusion of only 
+    relevant (traded or held) assets.
 
     Args:
-        df_mtm (Optional[pd.DataFrame]): The parsed 'Mark-to-Market' section dataframe.
-        symbol_currency_map (Dict[str, str]): A lookup dictionary for asset currencies.
-        master_symbol_set (Set[str]): A set of all valid symbols found in the report.
+        df_mtm (Optional[pd.DataFrame]): Parsed 'Mark-to-Market' section dataframe.
+        symbol_currency_map (Dict[str, str]): Lookup dictionary for asset currencies.
+        master_symbol_set (Set[str]): Set of all valid symbols found in the report.
 
     Returns:
-        pd.DataFrame: A DataFrame with columns ['symbol', 'asset_category', 'currency', 
-        'quantity', 'value_native']. Returns an empty DataFrame on failure.
+        pd.DataFrame: DataFrame with columns ['symbol', 'asset_category', 'currency', 
+        'quantity', 'value_native']. Returns empty DataFrame on failure.
     """
     if df_mtm is None:
         print(" [!] Warning: 'Mark-to-Market Performance Summary' section missing. Initial state empty.")
@@ -159,12 +149,11 @@ def parse_initial_state(
     # --- 1. Process Stocks ---
     df_stocks = df_mtm[df_mtm['Asset Category'] == 'Stocks'].copy()
     
-    # Apply: Applies a custom Python function element-wise. 
-    # Necessary here because 'clean_symbol' contains conditional logic not easily vectorised.
+    # Applies custom function element-wise because 'clean_symbol' contains 
+    # conditional logic not easily vectorized.
     df_stocks['symbol'] = df_stocks['Symbol'].apply(_clean_symbol)
     
-    # Set Membership Filtering: .isin() provides an efficient way to check membership 
-    # against a large set of known symbols.
+    # Checks membership against large set of known symbols efficiently.
     mask_valid = (df_stocks['symbol'].notna()) & (df_stocks['symbol'].isin(master_symbol_set))
     df_stocks = df_stocks[mask_valid].copy()
 
@@ -173,8 +162,8 @@ def parse_initial_state(
     
     df_stocks['value_native'] = df_stocks['quantity'] * prior_price
     
-    # Dictionary Mapping: .map() is used as a vectorised lookup (similar to Excel VLOOKUP).
-    # It uses the 'symbol' column keys to pull values from 'symbol_currency_map'.
+    # Uses .map() as vectorized lookup (similar to VLOOKUP).
+    # Pulls values from 'symbol_currency_map' using 'symbol' column keys.
     df_stocks['currency'] = df_stocks['symbol'].map(symbol_currency_map).fillna('Unknown')
     df_stocks['asset_category'] = 'Stock'
 
@@ -197,9 +186,9 @@ def parse_initial_state(
 
 def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> pd.DataFrame:
     """
-    Aggregates all portfolio activity into a single chronological timeline.
+    Aggregates portfolio activity into a single chronological timeline.
 
-    This function extracts and unifies data from multiple CSV sections:
+    Extracts and unifies data from multiple CSV sections:
     - Trades (Stocks and Forex)
     - Dividends and Withholding Taxes
     - Interest Income/Expense
@@ -208,11 +197,11 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
     - Corporate Actions (Splits, Rights)
 
     Args:
-        df_raw (pd.DataFrame): The full raw CSV data (for accessing non-Trade sections).
-        df_trades (Optional[pd.DataFrame]): The specific 'Trades' section dataframe.
+        df_raw (pd.DataFrame): Full raw CSV data (for accessing non-Trade sections).
+        df_trades (Optional[pd.DataFrame]): Specific 'Trades' section dataframe.
 
     Returns:
-        pd.DataFrame: A standardised event log sorted by timestamp, containing
+        pd.DataFrame: Standardized event log sorted by timestamp, containing
         columns for event type, symbol, cash changes, and quantity changes.
     """
     all_events = []
@@ -226,21 +215,20 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
         df_stock_trades['Symbol'] = df_stock_trades['Symbol'].apply(_clean_symbol)
         df_stock_trades = df_stock_trades.dropna(subset=['Symbol', 'Date/Time'])
         
-        # Vectorized Processing: Passing the entire Series to _clean_number rather than using .apply().
+        # Passes entire Series to _clean_number rather than using .apply().
         df_stock_trades['Quantity'] = _clean_number(df_stock_trades['Quantity'])
         
         df_stock_trades['Proceeds'] = pd.to_numeric(df_stock_trades['Proceeds'], errors='coerce').fillna(0)
         df_stock_trades['Comm/Fee'] = pd.to_numeric(df_stock_trades['Comm/Fee'], errors='coerce').fillna(0)
 
-        # Optimized Date Parsing: Explicitly defining the format string makes parsing significantly faster
-        # than letting Pandas infer the format for every row.
+        # Defines format string explicitly to speed up parsing.
         df_stock_trades['Date/Time'] = pd.to_datetime(
             df_stock_trades['Date/Time'], 
             format='%Y-%m-%d, %H:%M:%S'
         )
 
-        # DataFrame Iteration: iterrows() is generally slow, but appropriate here for constructing
-        # a standardized list of dictionaries (schema normalisation) from disparate sources.
+        # Iterates via iterrows() to construct standardized list of dictionaries 
+        # (schema normalization) from disparate sources.
         for _, row in df_stock_trades.iterrows():
             quantity_change = row['Quantity']
             cash_impact = row['Proceeds'] + row['Comm/Fee']
@@ -257,7 +245,7 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
         # 2. FOREX TRADES
         df_fx_trades = df_trades_orders[df_trades_orders['Asset Category'] == 'Forex'].copy()
         
-        # String Splitting with Expand: transform "EUR.USD" into two separate columns instantly.
+        # Splits string with Expand to transform "EUR.USD" into two separate columns.
         symbol_split = df_fx_trades['Symbol'].astype(str).str.split('.', n=1, expand=True)
         
         if symbol_split.shape[1] == 2:
@@ -306,8 +294,7 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
                 df_section['Date'] = pd.to_datetime(df_section['Date'], format='%d/%m/%Y')
             df_section = df_section.dropna(subset=['Date'])
             
-            # Vectorized Regex Extraction: .str.extract() applies regex to the entire column
-            # and returns the captured groups as new DataFrame columns.
+            # Applies regex to entire column using .str.extract() and returns captured groups.
             df_section['parsed_symbol'] = df_section['Description'].str.extract(extract_symbol_regex)[0]
             df_section['parsed_symbol'] = df_section['parsed_symbol'].apply(_clean_symbol)
                 
@@ -418,8 +405,7 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
         df_corp_actions['Date/Time'] = pd.to_datetime(df_corp_actions['Date/Time'], format='%Y-%m-%d, %H:%M:%S')
         df_corp_actions = df_corp_actions.dropna(subset=['Date/Time'])
 
-        # Optimisation: Compiling regex patterns is efficient here because they are used 
-        # repeatedly inside the loop below.
+        # Compiles regex patterns to improve efficiency within loop.
         split_regex = re.compile(r'Split\s+(\d+(?:\.\d+)?)\s+for\s+(\d+(?:\.\d+)?)')
         rights_target_regex = re.compile(r'Expire Dividend Right\s+\(([A-Za-z0-9]+)[,)]') 
         start_symbol_regex = re.compile(r'^([A-Za-z0-9]+)(?:\.[A-Za-z0-9]+)?\(')
@@ -479,7 +465,7 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
     else:
         df_event_log['split_ratio'] = df_event_log['split_ratio'].fillna(1.0)
 
-    # Schema Enforcement: sort chronologically and ensure all expected columns exist 
+    # Schema Enforcement: Sorts chronologically and ensures all expected columns exist 
     # (even if no split/corporate action events occurred in this specific file).
     df_event_log = df_event_log.sort_values(by='timestamp').reset_index(drop=True)
     return df_event_log.reindex(columns=expected_cols)
@@ -489,22 +475,22 @@ def parse_event_log(df_raw: pd.DataFrame, df_trades: Optional[pd.DataFrame]) -> 
 # ==========================================
 def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
     """
-    Orchestrates the loading, parsing, and validation of an IBKR Activity Report.
+    Loads, parses, and validates an IBKR Activity Report.
 
-    This is the main entry point. It performs the following steps:
-    1. Loads the CSV file into memory.
+    Steps:
+    1. Loads CSV file into memory.
     2. Extracts report metadata (Start Date, End Date, Base Currency).
-    3. Discovers all unique symbols and their currencies across various sections.
-    4. Parses the Initial State (Portfolio at T=0).
-    5. Parses the Event Log (Activity from T=0 to T=n).
+    3. Discovers all unique symbols and their currencies across sections.
+    4. Parses Initial State (Portfolio at T=0).
+    5. Parses Event Log (Activity from T=0 to T=n).
     6. Extracts Financial Instrument Information (ISINs, Exchanges).
-    7. Validates the data integrity.
+    7. Validates data integrity.
 
     Args:
-        filepath (str): The absolute or relative path to the IBKR CSV file.
+        filepath (str): Absolute or relative path to the IBKR CSV file.
 
     Returns:
-        Optional[Dict[str, Any]]: A dictionary containing the parsed data package
+        Optional[Dict[str, Any]]: Dictionary containing parsed data package
         keys ('initial_state', 'events', 'financial_info', etc.), or None if 
         parsing fails.
     """
@@ -512,20 +498,20 @@ def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
     time.sleep(0.5)
 
     try:
-        # Added 'names' to force a wide schema and prevent skipping wide rows.
-        # Changed encoding to 'utf-8-sig' to handle potential BOM characters safely.
+        # Adds 'names' to force a wide schema and prevent skipping wide rows.
+        # Uses 'utf-8-sig' to handle potential BOM characters safely.
         df_raw = pd.read_csv(
             filepath, 
             header=None, 
-            names=list(range(100)), # Create 0..99 columns to fit widest rows
+            names=list(range(100)), # Creates 0..99 columns to fit widest rows
             dtype=object, 
             on_bad_lines='skip', 
             low_memory=False,
-            encoding='utf-8-sig'    # Handle BOM (Byte Order Mark) often found in financial CSVs
+            encoding='utf-8-sig'    # Handles BOM (Byte Order Mark) often found in financial CSVs
         )
 
-        # Recommended: Strip whitespace from the Section Name column (Column 0)
-        # to ensure strictly equal matches like df_raw[0] == 'Trades' work.
+        # Strips whitespace from the Section Name column (Column 0)
+        # to ensure strictly equal matches like df_raw[0] == 'Trades'.
         df_raw[0] = df_raw[0].str.strip()
 
         report_start_date, report_end_date = None, None
@@ -533,7 +519,7 @@ def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
         
         try:
             period_row = df_raw[(df_raw[0] == 'Statement') & (df_raw[2] == 'Period')]
-            period_string = str(period_row.iloc[0, 3])  # Force cast to string
+            period_string = str(period_row.iloc[0, 3])  # Forces cast to string
             start_str, end_str = period_string.split(' - ')
             
             report_start_date = pd.to_datetime(start_str, format='%B %d, %Y').normalize()
@@ -559,14 +545,14 @@ def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
         if df_open_pos is not None:
             stocks = df_open_pos[df_open_pos['Asset Category'] == 'Stocks'].copy()
             
-            # Forward Fill: IBKR reports often list the Currency once and leave subsequent rows
-            # blank until the currency changes. .ffill() propagates the last valid value down.
+            # Forward Fill: Propagates the last valid Currency down, as IBKR reports 
+            # often list Currency once until it changes.
             stocks['Currency'] = stocks['Currency'].ffill()
             
             stocks['Symbol'] = stocks['Symbol'].apply(_clean_symbol)
             stocks = stocks.dropna(subset=['Symbol'])
             
-            # Dictionary Creation: Efficiently convert 2 columns into a Key:Value dictionary
+            # Efficiently converts 2 columns into a Key:Value dictionary.
             symbol_currency_map.update(stocks.set_index('Symbol')['Currency'].to_dict())
             master_symbol_set.update(stocks['Symbol'].unique())
 
@@ -616,17 +602,17 @@ def load_ibkr_report(filepath: str) -> Optional[Dict[str, Any]]:
                 df_financial_info['Underlying'] = df_financial_info['Underlying'].apply(_clean_symbol)
                 df_financial_info = df_financial_info.dropna(subset=['Underlying'])
 
-                # Rename 'Underlying' to 'symbol' to match the application's internal schema
+                # Rename 'Underlying' to 'symbol' to match internal schema.
                 df_financial_info = df_financial_info.rename(columns={
                     'Underlying': 'symbol',
                     'Security ID': 'ISIN',
                     'Listing Exch': 'Exchange'
                 })
                 
-                # Deduplicate based on the clean symbol
+                # Deduplicates based on clean symbol.
                 df_financial_info = df_financial_info.drop_duplicates(subset=['symbol'])
             else:
-                # Safety fallback if Underlying is missing
+                # Fallback if Underlying is missing.
                 df_financial_info = pd.DataFrame(columns=['symbol', 'ISIN', 'Exchange'])
         else:
             df_financial_info = pd.DataFrame(columns=['symbol', 'ISIN', 'Exchange'])

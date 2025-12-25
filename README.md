@@ -1,58 +1,103 @@
-# Portfolio Benchmarking & Stochastic Simulation Engine
-
-**Author:** [Your Name]
-**Student ID:** [Your Student ID]
-**Course:** Advanced Programming (Fall 2025)
-**Date:** January 11, 2026
+# Monte Carlo Portfolio Reconstruction
 
 ---
 
-## 1. Project Overview
-
-This project implements a **Portfolio Benchmarking and Stochastic Simulation framework**.
-
-The application serves as a simulation tool to compare actual portfolio performance against stochastic counterfactuals. By modeling full transaction economics—including dividends, margin rates, and transaction fees—the engine quantifies decision-making quality within the specific asset universe available to the portfolio manager.
-
-### Key Features
-* **Hybrid Data Sourcing:** Combines IBKR trade logs, `yfinance` market data, and a custom scraper for historical margin rates (with FRED fallback).
-* **Full Economics Modelling:** Accounts for stock splits, withholding taxes, and margin costs to create a realistic control environment.
-* **Stochastic Benchmarking:** Generates $N$ counterfactual portfolio paths to construct a rigorous performance baseline.
-* **State Machine Architecture:** Orchestrates data ingestion, market data acquisition, and simulation steps to ensure data integrity.
-* **Reproducible Analysis:** Automatically persists all numerical results (CSVs) and visualizations (PNGs) to a local `results/` directory.
+## Project Overview
 
 ---
 
-## 2. Research Question
+## Setup
 
-**"How does the realized performance of the portfolio compare against a distribution of stochastic counterfactuals derived from the same asset universe?"**
-
-Standard benchmarking methods (e.g., vs. S&P 500) often fail to account for the specific opportunity set and constraints of the investor. This project solves this by constructing a custom benchmark:
-1.  **Control Portfolio:** A faithful reconstruction of the actual portfolio using the simulation engine's logic to normalize fees and execution timing.
-2.  **Competence Universe:** A distribution of simulated portfolios where trade timing and capital allocation are fixed, but assets are randomly selected from the pool of instruments the investor actually traded.
+1.  **Clone Repository**
+2.  **Install Dependencies**
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  **Provide Data**
+    * **Portfolio Report** On IBKR navigate to Performance & Reports > Statements > Activity Statement, select any time period, and press Download CSV. Place the CSV file it in the `data/` folder of this application.
+    * **Saved States:** If existing simulation checkpoints exist (`.pkl` or `.pkl.gz`), they must be placed in the `data/saved_states/` folder to be recognized by the loader.
 
 ---
 
-## 3. Project Structure
+## Usage
+
+### Starting the Application
+
+Run the main application entry point:
+
+```bash
+python main.py
+```
+
+### Menu Options
+
+The application uses a state-machine architecture. Initially, the user can decide to load a saved state and run the **5. Analyse Results** step to analyse and visualise the results. To run a new simulation the user can either run each step sequentially or select **0. RUN FULL PIPELINE**. The menu has the following main options:
+
+* **0. RUN FULL PIPELINE**: Clears all data and executes Steps 1 through 5 sequentially.
+* **1. Load IBKR Report**: Loads the report CSV file and parses the initial state, the event log, and portfolio metadata
+* **2. Fetch Market Data**: Downloads historical asset market prices (Yahoo Finance) and generates daily margin rates (IBKR/FRED) for all assets found in Step 1.
+* **3. Run Control Reconstruction**: Rebuilds the *Real Portfolio* and generates the *Control Portfolio* (using the real trades but applying the simplified simulation logic).
+* **4. Run Monte Carlo Simulation**: Generates $N$ counterfactual portfolio paths by randomly replacing the asset for each trade in the event log.
+* **5. Analyse Results**: Calculates and plots risk and return metrics for the real and control portfolio and the simulated portfolios and saves them in `results/`.
+* **6. Save State**: Saves the current state of the application to `data/saved_states/`.
+* **7. Load State**: Loads a previous state from `data/saved_states/`.
+
+The user can exit the application from the main menu by typing Q and pressing Enter.
+
+---
+
+## Project Structure
 
 The project follows a modular structure in the `src/` directory, orchestrated by `main.py`.
 
 ```text
 ├── data/
-│   ├── checkpoints/           # Serialized simulation states (.pkl)
-│   └── [data].csv             # Input IBKR Activity Report (CSV)
-├── results/                   # Auto-generated analysis artifacts (CSVs & PNGs)
+│   ├── saved_states/               # Saved application states
+│   │   └── [data].pkl.gz
+│   └── [data].csv                  # Input IBKR Activity Reports
+│
+├── results/                        
+│   ├── [run]/                      # Generated results data of each run is saved in a dedicated subfolder
+│   │   ├── [data].png
+│   │   └── [data].csv
+│   └── [data].png                  # Highlighted simulation results
+│
 ├── src/
-│   ├── __init__.py            # Package initialization
-│   ├── config.py              # Fee schedules, currency lists, and constants
-│   ├── data_loader.py         # ETL pipeline for IBKR "stacked" CSVs
-│   ├── data_processor.py      # Logic for corporate actions and stock splits
-│   ├── market_data_loader.py  # yfinance API wrapper with retry logic
-│   ├── margin_rates.py        # Hybrid scraper (IBKR Website + FRED) for interest rates
-│   ├── simulation_engine.py   # Core Monte Carlo logic & Competence Universe selection
-│   ├── portfolio_reconstructor.py # Cash & Securities Engines for daily NAV calculation
-│   └── portfolio_analytics.py # Statistical metrics (Sharpe, Drawdown) & plotting
-├── main.py                    # Application Entry Point
-├── requirements.txt           # Python dependencies
-├── PROPOSAL.md                # Project Proposal
-├── AI_USAGE.md                # AI Tools Declaration
-└── README.md                  # Documentation
+│   ├── __init__.py                 # Package initialisation
+│   ├── config.py                   # Information on the risk-free rate, currencies, exchanges, taxes, fees, and margin spreads
+│   ├── data_loader.py              # Parses the IBKR CSV report
+│   ├── data_processor.py           # Split adjustment of the parsed data
+│   ├── margin_rates.py             # Hybrid interest rate scraper (IBKR & FRED)
+│   ├── market_data_loader.py       # Loads market data for relevant assets using yfinance
+│   ├── portfolio_analytics.py      # Analyses the simulation results and plots key results
+│   ├── portfolio_reconstructor.py  # Calculates the daily portfolio NAV from the initial state and event log
+│   └── simulation_engine.py        # Simulates counterfactual portfolio histories based on the initial state of the real portfolio
+│
+├── tests/
+│   ├── __init__.py                 # Package initialisation
+│   └── test.py                     # Tests the some of the internal logic of the application
+│
+├── main.py                         # Application entry point
+├── requirements.txt                # Python dependencies
+│
+├── README.md                       # Documentation
+├── PROPOSAL.md                     # Original project proposal
+└── AI_USAGE.md                     # AI usage summary
+```
+
+---
+
+## Testing
+
+To verify the applications arithmetic logic and simulation mechanics, a short test module can be run:
+
+```bash
+python -m unittest tests/test.py
+```
+
+---
+
+**Author:** Marvin Muranko
+**Student ID:** 21955182
+**Course:** Advanced Programming 2025
+**Date:** January 11, 2026

@@ -6,17 +6,17 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
     Adjusts the initial state and event log for stock splits and retroactive events.
 
     This function normalizes the portfolio history by applying a 'multiplier' to
-    all share quantities. This ensures that a share held in the past is expressed
+    all share quantities. This guarantees that a share held in the past is expressed
     in terms of today's share count (e.g., after a 4:1 split, 1 old share becomes
     4 current shares).
 
     Logic Summary:
-    Instead of iterating row-by-row, it uses vectorized cumulative products to
-    calculate a running split factor for every event.
+    Instead of iterating row-by-row, the function uses vectorized cumulative products
+    to calculate a running split factor for every event.
     The Multiplier for any given event = (Total Cumulative Split Ratio) / (Running Cumulative Ratio).
 
     Key Operations:
-    1. Retroactive Event Handling: Moves events like tax adjustments that occurred
+    1. Retroactive Event Handling: Shifts events (e.g., tax adjustments) occurring
        before the report start date to the start date itself.
     2. Vectorized Adjustment: Calculates multipliers for the entire dataset in
        one pass and updates trade quantities.
@@ -40,21 +40,20 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
 
     # --- 0. Handle Retroactive Events ---
 
-    # Goal: Identify retroactive events that take effect in the report period 
-    # (e.g. tax adjustments) and move them to the report start date. To avoid 
-    # the symbols being included in subsequent portfolio manipulations, their 
-    # symbol is set to None.
+    # Goal: Identify retroactive events taking effect in the report period 
+    # (e.g. tax adjustments) and shift them to the report start date. 
+    # Symbols are nulled to exclude them from subsequent portfolio manipulations.
     mask_prior = df_events['timestamp'] < report_start
     
     if mask_prior.any():
-        # Step 1: Fix the Timeline
+        # Step 1: Adjust the timeline
         print(f"     - Moved {mask_prior.sum()} historical events to start date {report_start.date()}.")
         df_events.loc[mask_prior, 'timestamp'] = report_start
 
-        # Step 2: Define the Universe of "Real" Stocks
-        # A stock is valid if it is in the Initial State.
-        # The Cash Engine will still see the 'cash_change', but the 
-        # Securities Engine will ignore the row because the symbol is missing.
+        # Step 2: Define the set of tradable Stocks
+        # A stock is tradable only if it exists in the Initial State.
+        # The Cash Engine retains visibility of 'cash_change', but the 
+        # Securities Engine bypasses the row due to the missing symbol.
         valid_universe = set(df_initial['symbol'].unique())
         
         ghost_mask = mask_prior & ~df_events['symbol'].isin(valid_universe)
@@ -66,17 +65,17 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
 
     # --- 1. Prepare Event Data ---
     
-    # EXPLANATION: Sorting is Critical
-    # Cumulative products rely entirely on row order. We must ensure the timeline is strictly chronological
-    # so the 'running factor' accumulates correctly from past to future.
+    # Sorting is Critical
+    # Cumulative products rely entirely on row order. A strict chronological timeline 
+    # is required for the 'running factor' to accumulate correctly.
     df_events = df_events.sort_values(by=['symbol', 'timestamp'])
 
-    # EXPLANATION: GroupBy Object
-    # We create a groupby object once to avoid repeatedly specifying ('symbol') in subsequent operations.
-    # This prepares the engine to treat each stock's timeline independently.
+    # GroupBy Object
+    # Creates a groupby object once to avoid repeated grouping overhead.
+    # Segments the engine to treat each stock's timeline independently.
     grouped_ratios = df_events.groupby('symbol')['split_ratio']
     
-    # EXPLANATION: Vectorised Cumulative Product (.cumprod)
+    # Vectorized Cumulative Product (.cumprod)
     # Calculates the running product of split ratios *down* the column for each symbol.
     # Row 1 (Ratio 1.0) -> Running 1.0
     # Row 2 (Ratio 1.0) -> Running 1.0
@@ -84,10 +83,10 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
     # Row 4 (Ratio 1.0) -> Running 4.0
     df_events['running_factor'] = grouped_ratios.cumprod()
     
-    # EXPLANATION: Vectorised Broadcast (.transform)
+    # Vectorized Broadcast (.transform)
     # .transform('prod') calculates the TOTAL product for the group (e.g., 4.0) 
     # and broadcasts that single value to EVERY row in that group.
-    # This allows us to divide the "Final State" by the "Current State" in one vector operation.
+    # Enables division of "Final State" by "Current State" in a single vector operation.
     df_events['total_factor'] = grouped_ratios.transform('prod')
     
     # Calculate the retroactive multiplier
@@ -96,19 +95,19 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
     # --- 2. Adjust Initial State ---
 
     if not df_initial.empty:
-        # EXPLANATION: Time-Travel Masking
-        # We need to know what the split factor was specifically at the moment the report started.
-        # We filter for events that happened in the past (<= report_start).
+        # Time-Travel Masking
+        # Isolate the split factor specifically at the moment the report started.
+        # Filters for events that occurred in the past (<= report_start).
         mask_past = df_events['timestamp'] <= report_start
         
-        # We take the .last() running factor from the past events to define the "state at start date".
+        # Retrieve the .last() running factor from past events to define the "state at start date".
         last_known_factor = df_events.loc[mask_past].groupby('symbol')['running_factor'].last()
         
-        # EXPLANATION: Map & Fill
-        # We map these calculated factors back to the initial_state DataFrame based on 'symbol'.
+        # Map & Fill
+        # Map calculated factors back to the initial_state DataFrame based on 'symbol'.
         # .fillna(1.0) handles stocks that had no events/splits (default multiplier is 1).
         
-        # 1. Get the Total Factor (The final target universe ratio)
+        # 1. Get the Total Factor
         initial_total = df_initial['symbol'].map(
             df_events.groupby('symbol')['total_factor'].first()
         ).fillna(1.0)
@@ -121,14 +120,14 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
 
     # --- 3. Adjust Event Log ---
 
-    # EXPLANATION: Vectorised Multiplication
-    # We simply multiply the entire 'quantity_change' column by our calculated 'multiplier' column.
-    # This adjusts pre-split trades (e.g., Buy 10 becomes Buy 40) while leaving post-split trades alone.
+    # Vectorized Multiplication
+    # Multiplies the entire 'quantity_change' column by the calculated 'multiplier' column.
+    # Adjusts pre-split trades (e.g., Buy 10 becomes Buy 40) while preserving post-split trades.
     df_events['quantity_change'] = df_events['quantity_change'] * df_events['multiplier']
 
     # --- 4. Cleanup and Restore Order ---
 
-    # Remove the temporary math columns to keep the DataFrame clean
+    # Remove intermediate calculation columns to maintain DataFrame hygiene
     df_events = df_events.drop(columns=['running_factor', 'total_factor', 'multiplier'])
     
     # Re-sort by timestamp strictly to ensure the returned log is chronological (mixed symbols allowed)
@@ -141,7 +140,7 @@ def apply_split_adjustments(data_package: Dict[str, Any]) -> Dict[str, Any]:
     # --- 5. Console Summary ---
     
     # Report actual splits found (High value information)
-    # We check the 'split_ratio' column to see if any non-1.0 entries exist
+    # Inspects the 'split_ratio' column for any non-1.0 entries
     split_events = df_events[df_events['split_ratio'] != 1.0]
     if not split_events.empty:
         split_symbols = split_events['symbol'].unique()
