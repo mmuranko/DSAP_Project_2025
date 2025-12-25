@@ -151,5 +151,4 @@ figures/
 
 # 1. Ignore everything in data/ by default but keep the folder itself and the saved_states folder
 data/*
-!data/.gitkeep
-!data/saved_states/.gitkeep
+!data/**/.gitkeep
