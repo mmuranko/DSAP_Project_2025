@@ -14,6 +14,7 @@ reproducible analysis and the persistent storage of simulation artifacts.
 import os
 import sys
 import pickle
+import gzip
 import pandas as pd
 import time
 from datetime import datetime
@@ -35,7 +36,7 @@ from src.portfolio_analytics import PortfolioAnalyser
 
 # --- Configuration Constants ---
 # Default path for the input CSV report, used if the user skips file selection.
-DEFAULT_REPORT_PATH = r'data/U13271915_20250101_20251029.csv'
+DEFAULT_REPORT_PATH = r'data\U13271915_20250101_20251224.csv'
 
 # Define the location for storing the application state (pickle files).
 # This allows the user to save the session and resume analysis later without re-running simulations.
@@ -324,12 +325,18 @@ class PortfolioSimulationApp:
         'Competence Universe'. Results are batched to manage memory usage efficiently.
         """
         # --- Dependency Check ---
-        # The Control Portfolio is a prerequisite, as it defines the baseline for comparison
         self._check_dependency(self.control_nav is not None, "Step 3 (Control Portfolio)", self.step_control_reconstruction)
         if self.control_nav is None: 
             return
 
         self._print_section_header("STEP 4: MONTE CARLO SIMULATION")
+
+        # CHANGE: Move Pylance guard to the top.
+        # This prevents the "Starting..." message from appearing if the engine isn't ready,
+        # and satisfies the static analyzer that self.engine is not None below.
+        if self.engine is None:
+            print(" [!] Engine is not initialized. Please run Step 2 first.")
+            return
 
         # Number of simulation paths defaults to the configuration constant
         n_paths = DEFAULT_PATHS
@@ -339,32 +346,22 @@ class PortfolioSimulationApp:
             user_input = input(f" >> Enter number of paths to generate [Default: {DEFAULT_PATHS}]: ").strip()
             time.sleep(0.5)
             
-            # Default value is used if no input is provided
             if not user_input:
                 n_paths = DEFAULT_PATHS
                 break
             
-            # User input is validated for type and range
             try:
                 val = int(user_input)
                 if 1 <= val <= 100000:
                     n_paths = val
                     break
                 else:
-                    print(" [!] Error: Number must be between 1 and 100,000. Please try again.")
-                    time.sleep(0.5)
+                    print(" [!] Error: Number must be between 1 and 100,000.")
             except ValueError:
-                print(" [!] Error: Invalid input. Please enter a positive whole number.")
-                time.sleep(0.5)
+                print(" [!] Error: Invalid input.")
 
         print(f"\n [>] Starting Monte Carlo Simulation ({n_paths} paths)...")
         time.sleep(0.5)
-
-        # Safety check to ensure engine availability (redundant if dependency chain holds, but safe)
-        if self.engine is None:
-            print(" [!] Engine is not initialized. Please run Step 2 first.")
-            time.sleep(0.5)
-            return
 
         all_navs = []
         paths_generated = 0
@@ -442,16 +439,13 @@ class PortfolioSimulationApp:
         # A unique subfolder is created for every run to prevent overwriting previous results.
         # Naming Convention: YYYYMMDD_HHMM_{InputFilename}_N{PathCount}
         
-        # Current time is captured for chronological sorting
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M")
-        
         # Number of paths is extracted to contextualize the results folder
         n_paths = self.simulation_results['simulated_paths'].shape[1]
         
         # Input filename tag is safely retrieved (defaults to 'Unknown' for legacy states)
-        input_tag = getattr(self, 'report_name', 'Unknown')
+        input_tag = getattr(self, 'report_name', 'Unknown').replace('.csv', '')
         
-        folder_name = f"{timestamp_str}_{input_tag}_N{n_paths}"
+        folder_name = f"{input_tag}_N{n_paths}"
         output_dir = os.path.join('results', folder_name)
         
         # Output directory is created (existing directories are ignored)
@@ -508,32 +502,32 @@ class PortfolioSimulationApp:
         )
 
         analyser.plot_drawdown_profile(
-            save_path=os.path.join(output_dir, '6_drawdown_profile.png')
+            save_path=os.path.join(output_dir, '3_drawdown_profile.png')
         )
 
         analyser.plot_distributions_NAV(
             raw_stats, 
-            save_path=os.path.join(output_dir, '3_distribution_NAV.png')
+            save_path=os.path.join(output_dir, '4_distribution_NAV.png')
         )
         
         analyser.plot_distributions_maxdd(
             raw_stats, 
-            save_path=os.path.join(output_dir, '4_distribution_maxdd.png')
+            save_path=os.path.join(output_dir, '5_distribution_maxdd.png')
         )
 
         analyser.plot_distributions_volatility(
             raw_stats, 
-            save_path=os.path.join(output_dir, '5_distribution_volatility.png')
+            save_path=os.path.join(output_dir, '6_distribution_volatility.png')
         )
 
         analyser.plot_distributions_CAGR(
             raw_stats, 
-            save_path=os.path.join(output_dir, '5_distribution_CAGR.png')
+            save_path=os.path.join(output_dir, '7_distribution_CAGR.png')
         )
 
         analyser.plot_distributions_sharpe(
             raw_stats, 
-            save_path=os.path.join(output_dir, '5_distribution_sharpe.png')
+            save_path=os.path.join(output_dir, '8_distribution_sharpe.png')
         )
         
         print(f"\n [+] All analysis files saved to: {output_dir}")
@@ -570,6 +564,7 @@ class PortfolioSimulationApp:
         self.control_nav = None
         self.real_nav = None
         self.simulation_results = None
+        self.report_name = None
 
     def _print_section_header(self, title: str) -> None:
         """
@@ -635,13 +630,13 @@ class PortfolioSimulationApp:
 
         # The entire application state is packaged into a dictionary. 
         # This includes metadata (timestamp) and all datasets required to resume analysis.
-
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M")
-        # Get the input filename (report_name), defaulting to 'Unknown' if not set
-        input_tag = getattr(self, 'report_name', 'unknown')
+        
+        # CHANGED: Strip .csv extension for cleaner filename
+        input_tag = getattr(self, 'report_name', 'unknown').replace('.csv', '')
         n_paths = self.simulation_results['simulated_paths'].shape[1]
         
-        filename = f"saved_state_{timestamp_str}_{input_tag}_N{n_paths}.pkl"
+        # CHANGED: Format is just {Name}_N{Paths}.pkl.gz
+        filename = f"{input_tag}_N{n_paths}.pkl.gz"
         save_path = os.path.join(CHECKPOINT_DIR, filename)
         
         # Ensure the checkpoint directory exists
@@ -650,7 +645,7 @@ class PortfolioSimulationApp:
         artifact = {
             'metadata': {
                 'timestamp': datetime.now(),
-                'report_name': input_tag
+                'report_name': getattr(self, 'report_name', 'unknown')
             },
             'datasets': {
                 'clean_data': self.clean_data,
@@ -661,8 +656,9 @@ class PortfolioSimulationApp:
             'results': self.simulation_results
         }
 
-        # The artifact is serialised to disk using pickle
-        with open(save_path, 'wb') as f:
+        # The artifact is serialised to disk using gzip and pickle
+        # CHANGED: open() -> gzip.open()
+        with gzip.open(save_path, 'wb') as f:
             pickle.dump(artifact, f)
         print(f" [+] State saved to {save_path}")
         time.sleep(0.5)
@@ -679,10 +675,10 @@ class PortfolioSimulationApp:
         self._print_section_header("LOADING STATE")
 
         # --- 1. Find available checkpoint files ---
-        # Lists all .pkl files in current directory starting with 'checkpoint_'
-        
-        files = [f for f in os.listdir(CHECKPOINT_DIR) if f.endswith('.pkl') and f.startswith('saved_state_')]
-        files.sort(reverse=True) # Show newest first
+        # Lists all .pkl and .pkl.gz files
+        files = [f for f in os.listdir(CHECKPOINT_DIR) if f.endswith('.pkl') or f.endswith('.pkl.gz')]
+        # Sort by modification time (newest first) rather than filename string
+        files.sort(key=lambda x: os.path.getmtime(os.path.join(CHECKPOINT_DIR, x)), reverse=True)
 
         if not files:
             print(" [!] No checkpoint files found.")
@@ -708,7 +704,11 @@ class PortfolioSimulationApp:
         print(f" [>] Loading {selected_file}...")
         
         # --- 3. Load and Restore State ---
-        with open(os.path.join(CHECKPOINT_DIR, selected_file), 'rb') as f:
+        # CHANGED: Detect if file is gzipped based on extension
+        full_path = os.path.join(CHECKPOINT_DIR, selected_file)
+        opener = gzip.open if selected_file.endswith('.gz') else open
+
+        with opener(full_path, 'rb') as f:
             artifact = pickle.load(f)
         
         # Restore Datasets
@@ -727,7 +727,7 @@ class PortfolioSimulationApp:
         self.real_nav = self.simulation_results['real_nav_series']
         
         # Re-initialise Engine
-        if self.clean_data and self.market_data is not None:
+        if self.clean_data is not None and self.market_data is not None:
              self.engine = sim.MonteCarloEngine(
                 self.clean_data, 
                 self.market_data, 
