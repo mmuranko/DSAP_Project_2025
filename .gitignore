@@ -149,13 +149,7 @@ figures/
 # PROJECT SPECIFIC EXCEPTIONS (The Final Say)
 # ==========================================
 
-# 1. Ignore everything in data/ by default...
+# 1. Ignore everything in data/ by default but keep the folder itself and the saved_states folder
 data/*
-
-# 2. ...BUT allow the placeholder (so the folder exists on GitHub)
 !data/.gitkeep
-
-# 3. ...AND allow the specific checkpoint file
-# (Must come AFTER *.pkl rule above to override it)
-!data/checkpoints/
-!data/checkpoints/simulation_artifact.pkl
+!data/saved_states/.gitkeep
