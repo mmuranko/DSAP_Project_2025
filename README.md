@@ -14,8 +14,8 @@
     pip install -r requirements.txt
     ```
 3.  **Provide Data**
-    * **Portfolio Report** On IBKR navigate to Performance & Reports > Statements > Activity Statement, select any time period, and press Download CSV. Place the CSV file it in the `data/` folder of this application.
-    * **Saved States:** If existing simulation checkpoints exist (`.pkl` or `.pkl.gz`), they must be placed in the `data/saved_states/` folder to be recognized by the loader.
+    **Portfolio Report** On IBKR navigate to Performance & Reports > Statements > Activity Statement, select any time period, and press Download CSV. Place the CSV file it in the `data/` folder of this application.  
+    **Saved States:** If existing simulation checkpoints exist (`.pkl` or `.pkl.gz`), they must be placed in the `data/saved_states/` folder to be recognized by the loader.  
 
 ---
 
@@ -97,7 +97,7 @@ python -m unittest tests/test.py
 
 ---
 
-**Author:** Marvin Muranko
-**Student ID:** 21955182
-**Course:** Advanced Programming 2025
-**Date:** January 11, 2026
+**Author:** Marvin Muranko  
+**Student ID:** 21955182  
+**Course:** Advanced Programming 2025  
+**Date:** January 11, 2026  

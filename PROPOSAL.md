@@ -10,7 +10,7 @@ The analysis will address practical complexities such as exchange rate conversio
 
 As a potential extension, the random replacement mechanism of the Monte Carlo simulation could be substituted with an optimisation-based approach: In this variant, replacement trades would be selected to maximise the portfolio’s instantaneous Sharpe ratio at each transaction point. This method would rely on the covariance matrix and expected returns of all assets within the portfolio universe, derived from daily historic returns of all assets up to that point in time. Comparing this Sharpe ratio-optimised scenario to both the realised and randomised simulations would provide deeper insight into the efficiency and opportunity cost of past investment decisions.
 
-**Author:** Marvin Muranko
-**Student ID:** 21955182
-**Course:** Advanced Programming 2025
-**Date:** January 11, 2026
+**Author:** Marvin Muranko  
+**Student ID:** 21955182  
+**Course:** Advanced Programming 2025  
+**Date:** January 11, 2026  
