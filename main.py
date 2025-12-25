@@ -39,8 +39,7 @@ DEFAULT_REPORT_PATH = r'data/U13271915_20250101_20251029.csv'
 
 # Define the location for storing the application state (pickle files).
 # This allows the user to save the session and resume analysis later without re-running simulations.
-CHECKPOINT_DIR = r'data/checkpoints'
-CHECKPOINT_FILE = os.path.join(CHECKPOINT_DIR, 'simulation_artifact.pkl')
+CHECKPOINT_DIR = r'data/saved_states'
 
 # Simulation defaults: 150 paths provides a reasonable statistical sample,
 # and a batch size of 50 manages memory usage during vectorised operations.
@@ -502,16 +501,39 @@ class PortfolioSimulationApp:
         analyser.plot_confidence_intervals(
             save_path=os.path.join(output_dir, '1_confidence_intervals.png')
         )
+
         analyser.plot_simulation_traces(
             num_paths=100, 
             save_path=os.path.join(output_dir, '2_simulation_traces.png')
-        ) 
-        analyser.plot_distributions(
-            raw_stats, 
-            save_path=os.path.join(output_dir, '3_distributions.png')
         )
+
         analyser.plot_drawdown_profile(
-            save_path=os.path.join(output_dir, '4_drawdown_profile.png')
+            save_path=os.path.join(output_dir, '6_drawdown_profile.png')
+        )
+
+        analyser.plot_distributions_NAV(
+            raw_stats, 
+            save_path=os.path.join(output_dir, '3_distribution_NAV.png')
+        )
+        
+        analyser.plot_distributions_maxdd(
+            raw_stats, 
+            save_path=os.path.join(output_dir, '4_distribution_maxdd.png')
+        )
+
+        analyser.plot_distributions_volatility(
+            raw_stats, 
+            save_path=os.path.join(output_dir, '5_distribution_volatility.png')
+        )
+
+        analyser.plot_distributions_CAGR(
+            raw_stats, 
+            save_path=os.path.join(output_dir, '5_distribution_CAGR.png')
+        )
+
+        analyser.plot_distributions_sharpe(
+            raw_stats, 
+            save_path=os.path.join(output_dir, '5_distribution_sharpe.png')
         )
         
         print(f"\n [+] All analysis files saved to: {output_dir}")
@@ -613,8 +635,23 @@ class PortfolioSimulationApp:
 
         # The entire application state is packaged into a dictionary. 
         # This includes metadata (timestamp) and all datasets required to resume analysis.
+
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M")
+        # Get the input filename (report_name), defaulting to 'Unknown' if not set
+        input_tag = getattr(self, 'report_name', 'unknown')
+        n_paths = self.simulation_results['simulated_paths'].shape[1]
+        
+        filename = f"saved_state_{timestamp_str}_{input_tag}_N{n_paths}.pkl"
+        save_path = os.path.join(CHECKPOINT_DIR, filename)
+        
+        # Ensure the checkpoint directory exists
+        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+        
         artifact = {
-            'metadata': {'timestamp': datetime.now()},
+            'metadata': {
+                'timestamp': datetime.now(),
+                'report_name': input_tag
+            },
             'datasets': {
                 'clean_data': self.clean_data,
                 'market_data': self.market_data,
@@ -625,9 +662,9 @@ class PortfolioSimulationApp:
         }
 
         # The artifact is serialised to disk using pickle
-        with open(CHECKPOINT_FILE, 'wb') as f:
+        with open(save_path, 'wb') as f:
             pickle.dump(artifact, f)
-        print(f" [+] State saved to {CHECKPOINT_FILE}")
+        print(f" [+] State saved to {save_path}")
         time.sleep(0.5)
         input("\n >> Press Enter to continue...")
         time.sleep(0.5)
@@ -640,31 +677,56 @@ class PortfolioSimulationApp:
         engine for immediate use.
         """
         self._print_section_header("LOADING STATE")
+
+        # --- 1. Find available checkpoint files ---
+        # Lists all .pkl files in current directory starting with 'checkpoint_'
         
-        if not os.path.exists(CHECKPOINT_FILE):
-            print(f" [!] No checkpoint found at {CHECKPOINT_FILE}")
+        files = [f for f in os.listdir(CHECKPOINT_DIR) if f.endswith('.pkl') and f.startswith('saved_state_')]
+        files.sort(reverse=True) # Show newest first
+
+        if not files:
+            print(" [!] No checkpoint files found.")
             time.sleep(0.5)
             input("\n >> Press Enter to return...")
             time.sleep(0.5)
             return
         
-        # The artifact is deserialised from disk
-        with open(CHECKPOINT_FILE, 'rb') as f:
+        # --- 2. Simple File Selection Menu ---
+        print("Available Checkpoints:")
+        for idx, f in enumerate(files):
+            print(f"   [{idx+1}] {f}")
+            
+        try:
+            choice = input("\n >> Select file number (or Enter to cancel): ")
+            if not choice.strip(): return
+            selected_file = files[int(choice) - 1]
+        except (ValueError, IndexError):
+            print(" [!] Invalid selection.")
+            time.sleep(1)
+            return
+
+        print(f" [>] Loading {selected_file}...")
+        
+        # --- 3. Load and Restore State ---
+        with open(os.path.join(CHECKPOINT_DIR, selected_file), 'rb') as f:
             artifact = pickle.load(f)
         
-        # State variables are populated from the loaded artifact
+        # Restore Datasets
         self.clean_data = artifact['datasets']['clean_data']
         self.market_data = artifact['datasets']['market_data']
         self.daily_rates = artifact['datasets']['daily_rates']
         self.flow_series = artifact['datasets'].get('flow_series', pd.Series(dtype=float))
         self.simulation_results = artifact['results']
+
+        # --- CRITICAL: Restore the Input Tag ---
+        # This ensures the visualisation step knows the original input name
+        self.report_name = artifact['metadata'].get('report_name', 'unknown')
         
-        # Navigation shortcuts are re-established for convenience
+        # Restore Nav shortcuts
         self.control_nav = self.simulation_results['control_nav_series']
         self.real_nav = self.simulation_results['real_nav_series']
         
-        # The simulation engine is re-initialised using the loaded data 
-        # to allow for new simulations to be run if desired
+        # Re-initialise Engine
         if self.clean_data and self.market_data is not None:
              self.engine = sim.MonteCarloEngine(
                 self.clean_data, 

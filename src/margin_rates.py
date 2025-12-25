@@ -51,7 +51,7 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
     time.sleep(0.5)
     
     # 1. Scrape Recent Data
-    df_scraped = _get_daily_margin_rates_scraper(start_date, end_date)
+    df_scraped = _get_daily_margin_rates(start_date, end_date)
     
     if df_scraped.empty:
         min_scraped_date = end_date + pd.Timedelta(days=1)
@@ -95,7 +95,7 @@ def get_ibkr_rates_hybrid(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
     return df_final.loc[start_date:end_date]
 
 
-def _get_daily_margin_rates_scraper(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
+def _get_daily_margin_rates(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     """
     Scrapes official historical margin rates from the Interactive Brokers website.
 
@@ -182,7 +182,7 @@ def _get_daily_margin_rates_scraper(start_date: pd.Timestamp, end_date: pd.Times
                     
                     for c_idx, curr in col_map.items():
                         if c_idx >= len(cols): continue
-                        rate = parse_ibkr_rate(cols[c_idx], curr)
+                        rate = _parse_ibkr_rate(cols[c_idx], curr)
                         if rate is not None:
                             all_data.append({'date': pd.to_datetime(date_str), 'currency': curr, 'rate': rate})
             
@@ -272,7 +272,7 @@ def _get_fred_proxy_rates(start_date: pd.Timestamp, end_date: pd.Timestamp) -> p
 
     return proxy_data
 
-def parse_ibkr_rate(rate_str: str, currency: str) -> Optional[float]:
+def _parse_ibkr_rate(rate_str: str, currency: str) -> Optional[float]:
     """
     Parses and standardizes a raw rate string from the IBKR HTML table.
 

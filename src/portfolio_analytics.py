@@ -16,6 +16,22 @@ import time
 from typing import Optional, Any
 from .config import RISK_FREE_RATE
 
+# Set the global font to be consistent across all plots
+# 'font.serif': 'DejaVu Serif', 'Times New Roman', 'Georgia', 'Garamond'
+# 'font.sans-serif': 'DejaVu Sans', 'Arial', 'Helvetica', 'Calibri'
+# 'font.monospace': 'DejaVu Sans Mono', 'Courier New', 'Consolas'
+plt.rcParams.update({
+    'font.family': 'serif',
+    'font.size': 12,                  # Base font size
+    'axes.titlesize': 16,             # Title size
+    'axes.titleweight': 'bold',       # Title weight
+    'axes.labelsize': 14,             # X/Y label size
+    'xtick.labelsize': 12,            # X-axis tick size
+    'ytick.labelsize': 12,            # Y-axis tick size
+    'legend.fontsize': 12,            # Legend text size
+    'figure.titlesize': 18            # Super title size (if used)
+})
+
 class PortfolioAnalyser:
     """
     Encapsulates logic for comparative portfolio performance analysis and visualisation.
@@ -199,11 +215,6 @@ class PortfolioAnalyser:
         
         return df, df_sim_stats, df_styled
 
-    def _get_drawdown_series(self, series: pd.Series) -> pd.Series:
-        """Helper to calculate the drawdown curve for a given price series."""
-        roll_max = series.cummax()
-        return (series - roll_max) / roll_max
-
     # ==========================================
     # VISUALISATION METHODS
     # ==========================================
@@ -246,7 +257,7 @@ class PortfolioAnalyser:
         if save_path:
             print(f" [>] Saving plot to {save_path}")
             time.sleep(0.5)
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
 
         plt.show()
 
@@ -279,7 +290,7 @@ class PortfolioAnalyser:
         if save_path:
             print(f" [>] Saving plot to {save_path}")
             time.sleep(0.5)
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
 
         plt.show()
 
@@ -295,18 +306,18 @@ class PortfolioAnalyser:
         plt.figure(figsize=(12, 4))
         
         # Helper lambda to get drawdown from Wealth Index
-        def get_dd(s):
+        def _get_dd(s):
             _, wi = self._get_adjusted_returns_and_index(s)
             roll = wi.cummax()
             return (wi - roll) / roll
 
-        dd_real = get_dd(self.real)
-        dd_control = get_dd(self.control)
+        dd_real = _get_dd(self.real)
+        dd_control = _get_dd(self.control)
         
         # For simulation, we compute the median NAV path first, then its wealth index
         # (Approximation: Median of paths vs Path of Medians. Path of Medians is safer here)
         median_sim_nav = self.sims.median(axis=1)
-        dd_sim = get_dd(median_sim_nav)
+        dd_sim = _get_dd(median_sim_nav)
         
         # Plot Median Simulated Portfolio
         plt.plot(dd_sim, color='gray', linestyle=':', linewidth=1.5, label='Median Simulated Portfolio Drawdown')
@@ -328,143 +339,184 @@ class PortfolioAnalyser:
         if save_path:
             print(f" [>] Saving plot to {save_path}")
             time.sleep(0.5)
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
 
         plt.show()
 
+    def plot_distributions_NAV(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
+        """Generates histogram for Final Net Asset Value (NAV)."""
+        fig, ax = plt.subplots(figsize=(10, 6))
 
-    def plot_distributions(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
-        """ 
-        Generates histograms for key metrics (Final NAV, Maximum Drawdown, Volatility, Sharpe).
+        # Calculate metrics
+        mean_val = sim_raw_stats['Final_NAV'].mean()
+
+        # Distribution
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Final_NAV'])
         
-        Vertical lines are drawn to indicate the position of the Real and Control 
-        portfolios within the simulated distribution.
-
-        Args:
-            sim_raw_stats (pd.DataFrame): DataFrame containing metrics calculated 
-                                          for each simulation path.
-        """
+        sns.histplot(data=sim_raw_stats, x='Final_NAV', bins=bins, kde=True, ax=ax, color='skyblue')
+        self._add_lines(ax, self.real.iloc[-1], self.control.iloc[-1], mean_val)
         
-        def get_aligned_bins(data: pd.Series, step_size: float) -> np.ndarray:
-            """Calculates bin edges aligned to specific step sizes."""
-            if step_size <= 0: return np.array([data.min(), data.max()])
-            lower = np.floor(data.min() / step_size) * step_size
-            upper = np.ceil(data.max() / step_size) * step_size
-            return np.arange(lower, upper + step_size + (step_size/1000), step_size)
-        
-        def add_lines(ax: Axes, real_val: float, control_val: float) -> None:
-            """Helper to add vertical reference lines to histograms."""
-            ax.axvline(real_val, color='red', linestyle='-', linewidth=2, label='Real')
-            ax.axvline(control_val, color='blue', linestyle='--', linewidth=2, label='Control')
-            ax.legend(loc='upper right', framealpha=1.0, facecolor='white')
-        
-        def get_dynamic_bins_and_stride(data: pd.Series, target_bins: int = 40, target_ticks: int = 8) -> tuple[np.ndarray, int]:
-            """
-            Calculates optimal histogram bin edges and a tick stride for x-axis labelling.
-
-            This function dynamically adapts to the data range to prevent overcrowding or 
-            undersampling of the distribution visualisation. It selects a "human-readable" 
-            step size (e.g., 1.0, 2.5, 5.0) to ensure bin edges align with common numerical 
-            intervals (the "1-2-5" rule).
-
-            Args:
-                data (pd.Series): The dataset for which the histogram is being generated.
-                target_bins (int): The approximate desired number of bins. Defaults to 40.
-                target_ticks (int): The approximate desired number of x-axis labels. Defaults to 8.
-
-            Returns:
-                Tuple[np.ndarray, int]: A tuple containing:
-                    - bins_array: An array of bin edges aligned to the calculated step size.
-                    - tick_stride: An integer indicating the slice interval (stride) to use 
-                      for x-axis ticks (e.g., `bins[::stride]`).
-            """
-            val_range = data.max() - data.min()
-
-            # Handle edge cases where variance is zero or negligible (prevent division by zero)
-            if val_range <= 0: val_range = abs(data.mean()) * 0.1 # Fallback for zero variance
-            if val_range == 0: val_range = 1.0
-            
-            # 1. Estimate raw step size required to achieve the target bin count
-            raw_step = val_range / target_bins
-            
-            # 2. Snap to "Nice" Human Numbers (1, 2, 2.5, 5, 10)
-            # This logic isolates the order of magnitude (power of 10) and then selects
-            # a standard interval multiplier. This ensures that ticks land on clean 
-            # values (e.g., 0.25, 0.50) rather than irregular ones (e.g., 0.237).
-            magnitude = 10 ** np.floor(np.log10(raw_step))
-            residual = raw_step / magnitude
-            
-            if residual <= 1.0: nice_step = 1.0 * magnitude
-            elif residual <= 2.0: nice_step = 2.0 * magnitude
-            elif residual <= 2.5: nice_step = 2.5 * magnitude
-            elif residual <= 5.0: nice_step = 5.0 * magnitude
-            else: nice_step = 10.0 * magnitude
-            
-            # 3. Generate Bins aligned to the "nice" step
-            bins = get_aligned_bins(data, nice_step)
-            
-            # 4. Calculate Stride to maintain clean x-axis visualisation
-            # The stride determines how many bins are skipped between each tick label
-            # to prevent text overlap while maintaining the target tick count.
-            total_bins = len(bins)
-            stride = max(1, total_bins // target_ticks)
-            
-            return bins, stride
-
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        axes = axes.flatten()
-
-        # 1. Final NAV Distribution
-        bins_nav, stride_nav = get_dynamic_bins_and_stride(sim_raw_stats['Final_NAV'])
-        
-        sns.histplot(data=sim_raw_stats, x='Final_NAV', bins=bins_nav, kde=True, ax=axes[0], color='skyblue')
-        add_lines(axes[0], self.real.iloc[-1], self.control.iloc[-1])
-        axes[0].set_title('Final NAV Distribution')
-        axes[0].set_xlabel("Net Asset Value [CHF]")
-        axes[0].set_ylabel("Count")
-        axes[0].set_xticks(bins_nav[::stride_nav])
-        axes[0].xaxis.set_major_formatter(mtick.StrMethodFormatter('{x:,.0f}'))
-
-        # 2. Maximum Drawdown Distribution
-        bins_dd, stride_dd = get_dynamic_bins_and_stride(sim_raw_stats['Max_DD'])
-        
-        sns.histplot(data=sim_raw_stats, x='Max_DD', bins=bins_dd, kde=True, ax=axes[1], color='salmon')
-        real_stats = self._calculate_metrics(self.real)
-        control_stats = self._calculate_metrics(self.control)
-        add_lines(axes[1], real_stats['Max_DD'], control_stats['Max_DD'])
-        axes[1].set_title('Maximum Drawdown Distribution')
-        axes[1].set_xlabel("Drawdown [%]")
-        axes[0].set_ylabel("Count")
-        axes[1].set_xticks(bins_dd[::stride_dd])
-        axes[1].xaxis.set_major_formatter(mtick.PercentFormatter(1.0))
-
-        # 3. Volatility Distribution
-        bins_vol, stride_vol = get_dynamic_bins_and_stride(sim_raw_stats['Volatility'])
-        
-        sns.histplot(sim_raw_stats, x='Volatility', bins=bins_vol, kde=True, ax=axes[2], color='lightgreen')
-        add_lines(axes[2], real_stats['Volatility'], control_stats['Volatility'])
-        axes[2].set_title('Volatility Distribution')
-        axes[2].set_xlabel("Annualised Volatility [%]")
-        axes[0].set_ylabel("Count")
-        axes[2].set_xticks(bins_vol[::stride_vol])
-        axes[2].xaxis.set_major_formatter(mtick.PercentFormatter(1.0))
-
-        # 4. Sharpe Ratio Distribution
-        bins_sharpe, stride_sharpe = get_dynamic_bins_and_stride(sim_raw_stats['Sharpe'])
-        
-        sns.histplot(sim_raw_stats, x='Sharpe', bins=bins_sharpe, kde=True, ax=axes[3], color='gold')
-        add_lines(axes[3], real_stats['Sharpe'], control_stats['Sharpe'])
-        axes[3].set_title('Sharpe Ratio Distribution')
-        axes[3].set_xlabel("Sharpe Ratio")
-        axes[0].set_ylabel("Count")
-        axes[3].set_xticks(bins_sharpe[::stride_sharpe])
-        axes[3].xaxis.set_major_formatter(mtick.FormatStrFormatter('%.2f'))
+        # ax.set_title('Final NAV Distribution')
+        ax.set_xlabel("Net Asset Value [CHF]")
+        ax.set_ylabel("Count")
+        ax.set_xticks(bins[::stride])
+        ax.xaxis.set_major_formatter(mtick.StrMethodFormatter('{x:,.0f}'))
 
         plt.tight_layout()
-
         if save_path:
-            print(f" [>] Saving plot to {save_path}")
-            time.sleep(0.5)
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-
+            print(f" [>] Saving NAV plot to {save_path}")
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
         plt.show()
+
+    def plot_distributions_maxdd(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
+        """Generates histogram for Maximum Drawdown."""
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Calculate metrics
+        real_stats = self._calculate_metrics(self.real)
+        control_stats = self._calculate_metrics(self.control)
+        mean_val = sim_raw_stats['Max_DD'].mean()
+
+        # Distribution
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Max_DD'])
+        
+        sns.histplot(data=sim_raw_stats, x='Max_DD', bins=bins, kde=True, ax=ax, color='salmon')
+        self._add_lines(ax, real_stats['Max_DD'], control_stats['Max_DD'], mean_val)
+        
+        # ax.set_title('Maximum Drawdown Distribution')
+        ax.set_xlabel("Drawdown [%]")
+        ax.set_ylabel("Count")
+        ax.set_xticks(bins[::stride])
+        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=0, symbol=''))
+
+        plt.tight_layout()
+        if save_path:
+            print(f" [>] Saving MaxDD plot to {save_path}")
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
+        plt.show()
+
+    def plot_distributions_volatility(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
+        """Generates histogram for Volatility."""
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Calculate metrics
+        real_stats = self._calculate_metrics(self.real)
+        control_stats = self._calculate_metrics(self.control)
+        mean_val = sim_raw_stats['Volatility'].mean()
+
+        # Distribution
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Volatility'])
+        
+        sns.histplot(data=sim_raw_stats, x='Volatility', bins=bins, kde=True, ax=ax, color='lightgreen')
+        self._add_lines(ax, real_stats['Volatility'], control_stats['Volatility'], mean_val)
+        
+        # ax.set_title('Volatility Distribution')
+        ax.set_xlabel("Annualised Volatility [%]")
+        ax.set_ylabel("Count")
+        ax.set_xticks(bins[::stride])
+        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=0, symbol=''))
+
+        plt.tight_layout()
+        if save_path:
+            print(f" [>] Saving Volatility plot to {save_path}")
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
+        plt.show()
+
+    def plot_distributions_CAGR(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
+        """Generates histogram for CAGR."""
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Calculate metrics
+        real_stats = self._calculate_metrics(self.real)
+        control_stats = self._calculate_metrics(self.control)
+        mean_val = sim_raw_stats['CAGR'].mean()
+
+        # Distribution
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['CAGR'])
+        
+        sns.histplot(data=sim_raw_stats, x='CAGR', bins=bins, kde=True, ax=ax, color='orchid')
+        self._add_lines(ax, real_stats['CAGR'], control_stats['CAGR'], mean_val)
+        
+        # ax.set_title('CAGR Distribution')
+        ax.set_xlabel("Compound Annual Growth Rate [%]")
+        ax.set_ylabel("Count")
+        ax.set_xticks(bins[::stride])
+        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=0, symbol=''))
+
+        plt.tight_layout()
+        if save_path:
+            print(f" [>] Saving CAGR plot to {save_path}")
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
+        plt.show()
+    
+    def plot_distributions_sharpe(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
+        """Generates histogram for Sharpe Ratio."""
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Calculate metrics
+        real_stats = self._calculate_metrics(self.real)
+        control_stats = self._calculate_metrics(self.control)
+        mean_val = sim_raw_stats['Sharpe'].mean()
+
+        # Distribution
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Sharpe'])
+        
+        sns.histplot(data=sim_raw_stats, x='Sharpe', bins=bins, kde=True, ax=ax, color='gold')
+        self._add_lines(ax, real_stats['Sharpe'], control_stats['Sharpe'], mean_val)
+        
+        # ax.set_title('Sharpe Ratio Distribution')
+        ax.set_xlabel("Sharpe Ratio")
+        ax.set_ylabel("Count")
+        ax.set_xticks(bins[::stride])
+        ax.xaxis.set_major_formatter(mtick.FormatStrFormatter('%.2f'))
+
+        plt.tight_layout()
+        if save_path:
+            print(f" [>] Saving Sharpe plot to {save_path}")
+            plt.savefig(save_path, dpi=600, bbox_inches='tight')
+        plt.show()
+
+    def _add_lines(self, ax: Axes, real_val: float, control_val: float, mean_val: float) -> None:
+        """Helper to add vertical reference lines to histograms."""
+        ax.axvline(real_val, color='red', linestyle='-', linewidth=2, label='Real')
+        ax.axvline(control_val, color='blue', linestyle='--', linewidth=2, label='Control')
+        ax.axvline(mean_val, color='black', linestyle=':', linewidth=2, label='Average') 
+        ax.legend(loc='upper right', framealpha=1.0, facecolor='white')
+
+    def _get_dynamic_bins_and_stride(self, data: pd.Series, target_bins: int = 40, target_ticks: int = 8) -> tuple[np.ndarray, int]:
+        """
+        Calculates optimal histogram bin edges and a tick stride for x-axis labelling.
+        Dynamically adapts to the data range using the "1-2-5" rule.
+        """
+        val_range = data.max() - data.min()
+
+        # Handle edge cases where variance is zero or negligible
+        if val_range <= 0: val_range = abs(data.mean()) * 0.1 
+        if val_range == 0: val_range = 1.0
+            
+        # 1. Estimate raw step size required to achieve the target bin count
+        raw_step = val_range / target_bins
+            
+        # 2. Snap to "Nice" Human Numbers (1, 2, 2.5, 5, 10)
+        magnitude = 10 ** np.floor(np.log10(raw_step))
+        residual = raw_step / magnitude
+            
+        if residual <= 1.0: nice_step = 1.0 * magnitude
+        elif residual <= 2.0: nice_step = 2.0 * magnitude
+        elif residual <= 2.5: nice_step = 2.5 * magnitude
+        elif residual <= 5.0: nice_step = 5.0 * magnitude
+        else: nice_step = 10.0 * magnitude
+            
+        # 3. Generate Bins aligned to the "nice" step (Inlined Logic)
+        if nice_step <= 0: 
+            bins = np.array([data.min(), data.max()])
+        else:
+            lower = np.floor(data.min() / nice_step) * nice_step
+            upper = np.ceil(data.max() / nice_step) * nice_step
+            bins = np.arange(lower, upper + nice_step + (nice_step/1000), nice_step)
+            
+        # 4. Calculate Stride to maintain clean x-axis visualisation
+        total_bins = len(bins)
+        stride = max(1, total_bins // target_ticks)
+            
+        return bins, stride
