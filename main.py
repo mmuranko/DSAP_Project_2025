@@ -90,14 +90,16 @@ class PortfolioSimulationApp:
         """
         while True:
             self._print_header()
-            print(" 0. ** RUN FULL PIPELINE ** (Start to Finish)")
-            print(" 1. Load IBKR Report")
+            print(" 0. RUN FULL PIPELINE")
+            print(" 1. Parse IBKR Report")
             print(" 2. Fetch Market Data")
             print(" 3. Run Control Portfolio Reconstruction")
             print(" 4. Run Monte Carlo Simulation")
-            print(" 5. Analyse Results")
+            print(" 5. Analyse and Plot Results")
+            print()
             print(" 6. Save State")
             print(" 7. Load State")
+            print()
             print(" Q. Quit")
             print("-" * 60)
             
