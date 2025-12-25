@@ -152,3 +152,9 @@ figures/
 # 1. Ignore everything in data/ by default but keep the folder itself and the saved_states folder
 data/*
 !data/**/.gitkeep
+
+# 1. Ignore EVERYTHING inside the results folder (files and subfolders), 
+# but allow .png files directly inside the results folder and keep the folder structure, even when empty
+results/*
+!results/*.png
+!results/.gitkeep
