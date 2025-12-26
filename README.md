@@ -4,6 +4,8 @@
 
 ## Project Overview
 
+This Python application reconstructs historical investment portfolios from Interactive Brokers (IBKR) activity statements and performs Monte Carlo simulations to assess performance attribution. By generating counterfactual portfolio histories based on the investor's specific set of tradeable assets, the application isolates skill from luck. 
+
 ---
 
 ## Setup
@@ -34,7 +36,7 @@ python main.py
 The application uses a state-machine architecture. Initially, the user can decide to load a saved state and run the `5. Analyse Results` step to analyse and visualise the results. To run a new simulation the user can either run each step sequentially or select `0. RUN FULL PIPELINE`. The menu has the following main options:
 
 - `0. RUN FULL PIPELINE`: Clears all data and executes Steps 1 through 5 sequentially. 
-- `1. Load IBKR Report`: Loads the report CSV file and parses the initial state, the event log, and portfolio metadata. 
+- `1. Parse IBKR Report`: Loads the report CSV file and parses the initial state, the event log, and portfolio metadata. 
 - `2. Fetch Market Data`: Downloads historical asset market prices (Yahoo Finance) and generates daily margin rates (IBKR/FRED) for all assets found in Step 1. 
 - `3. Run Control Reconstruction`: Rebuilds the *Real Portfolio* and generates the *Control Portfolio* (using the real trades but applying the simplified simulation logic). 
 - `4. Run Monte Carlo Simulation`: Generates $N$ counterfactual portfolio paths by randomly replacing the asset for each trade in the event log. 
@@ -42,7 +44,9 @@ The application uses a state-machine architecture. Initially, the user can decid
 - `6. Save State`: Saves the current state of the application to `data/saved_states/`. 
 - `7. Load State`: Loads a previous state from `data/saved_states/`. 
 
-The user can exit the application from the main menu by typing Q and pressing Enter. 
+The user can exit the application from the main menu by typing `Q` and pressing Enter.  
+
+When selecting `1. Parse IBKR Report` or `7. Load State`, the user can choose the file to be parsed or loaded from a list of existing files.  
 
 ---
 
