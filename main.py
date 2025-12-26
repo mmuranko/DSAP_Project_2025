@@ -52,6 +52,7 @@ CHECKPOINT_DIR = r'data/saved_states'
 SIMULATION_SEED = 42
 DEFAULT_PATHS = 150
 BATCH_SIZE = 50 
+ENABLE_TIMING = False
 
 class PortfolioSimulationApp:
     """
@@ -97,7 +98,7 @@ class PortfolioSimulationApp:
             print(" 0. RUN FULL PIPELINE")
             print(" 1. Parse IBKR Report")
             print(" 2. Fetch Market Data")
-            print(" 3. Run Control Portfolio Reconstruction")
+            print(" 3. Run Real & Control Portfolio Reconstruction")
             print(" 4. Run Monte Carlo Simulation")
             print(" 5. Analyse and Plot Results")
             print()
@@ -121,6 +122,12 @@ class PortfolioSimulationApp:
             choice = input(" >> Select Option: ").upper().strip()
             time.sleep(0.5)
 
+            """
+            start_time_0 = time.time() if ENABLE_TIMING else 0.0
+            time_step_load_data = time.time() - start_time_0
+                    print(f" [t] Step 1 - Parse IBKR Report: {time_step_load_data:.2f}s")
+            """
+
             if choice == '0':
                 # Force state reset to ensure clean pipeline execution.
                 self._reset_state()
@@ -129,26 +136,35 @@ class PortfolioSimulationApp:
                 self.step_control_reconstruction()
                 self.step_run_simulation()
                 self.step_analyse()
+
             elif choice == '1':
                 # Reset state to prevent mixing new data with old artifacts.
                 self._reset_state()
                 self.step_load_data()
+
             elif choice == '2':
                 self.step_fetch_market_data()
+
             elif choice == '3':
                 self.step_control_reconstruction()
+
             elif choice == '4':
                 self.step_run_simulation()
+
             elif choice == '5':
                 self.step_analyse()
+
             elif choice == '6':
                 self._save_checkpoint()
+
             elif choice == '7':
                 # Reset state before loading external checkpoint.
                 self._reset_state()
                 self._load_checkpoint()
+
             elif choice == 'Q':
                 sys.exit()
+
             else:
                 print(" [!] Invalid selection.")
                 time.sleep(0.5)
@@ -228,9 +244,11 @@ class PortfolioSimulationApp:
 
         # Verifies file existence.
         if not os.path.exists(path):
-            print(f" [!] Error: File not found at {path}")
+            print(f"\n [!] Error: File not found at {path}")
             time.sleep(0.5)
             return
+        
+        start_time = time.time() if ENABLE_TIMING else 0.0
 
         # Stores filename for output directory naming.
         self.report_name = os.path.basename(path)
@@ -242,7 +260,7 @@ class PortfolioSimulationApp:
             # Applies stock split adjustments to historical holdings.
             self.clean_data = dp.apply_split_adjustments(self.raw_data)
         else:
-            print(" [!] Data load failed.")
+            print("\n [!] Data load failed.")
             time.sleep(0.5)
             return
 
@@ -269,6 +287,11 @@ class PortfolioSimulationApp:
             # Aggregates daily net flows (amounts assumed in Base Currency).
             self.flow_series = flows.groupby('timestamp')['cash_change_native'].sum().sort_index()
 
+        time_step = time.time() - start_time
+
+        if start_time > 0.0:
+            print(f"\n [t] Step 1: {time_step:.2f}s")
+
     # =========================================================================
     # STEP 2: MARKET DATA
     # =========================================================================
@@ -294,6 +317,8 @@ class PortfolioSimulationApp:
         self.real_nav = None
         self.simulation_results = None
 
+        start_time = time.time() if ENABLE_TIMING else 0.0
+
         # Derive fetch date range from loaded report.
         start = self.clean_data['report_start_date']
         end = self.clean_data['report_end_date']
@@ -311,11 +336,16 @@ class PortfolioSimulationApp:
             self.daily_rates
         )
         
+        time_step = time.time() - start_time
+            
         print("\n [+] Market data setup complete.")
         time.sleep(0.5)
 
+        if start_time > 0.0:
+            print(f"\n [t] Step 2: {time_step:.2f}s")
+
     # =========================================================================
-    # STEP 3: CONTROL PORTFOLIO RECONSTRUCTION
+    # STEP 3: CONTROL & REAL PORTFOLIO RECONSTRUCTION
     # =========================================================================
     def step_control_reconstruction(self) -> None:
         """
@@ -331,15 +361,17 @@ class PortfolioSimulationApp:
         if self.engine is None: 
             return
 
-        self._print_section_header("STEP 3: CONTROL PORTFOLIO & REALITY CHECK")
-
-        if self.clean_data is None or self.market_data is None:
-            print(" [!] Critical Error: Data not loaded correctly.")
-            time.sleep(0.5)
-            return
+        self._print_section_header("STEP 3: CONTROL & REAL PORTFOLIO RECONSTRUCTION")
 
         # Invalidate downstream simulation results if control portfolio changes.
         self.simulation_results = None
+
+        if self.clean_data is None or self.market_data is None:
+            print("\n [!] Critical Error: Data not loaded correctly.")
+            time.sleep(0.5)
+            return
+        
+        start_time = time.time() if ENABLE_TIMING else 0.0
 
         # Reconstruct real portfolio mirroring actual execution.
         self.real_res = pr.reconstruct_portfolio(self.clean_data, self.market_data, verbose=True)
@@ -359,6 +391,11 @@ class PortfolioSimulationApp:
         # Store key NAV series in application state.
         self.control_nav = self.control_res['total_nav']
         self.real_nav = self.real_res['total_nav']
+
+        time_step = time.time() - start_time
+
+        if start_time > 0.0:
+            print(f"\n [t] Step 3: {time_step:.2f}s")
 
     # =========================================================================
     # STEP 4: MONTE CARLO SIMULATION
@@ -407,6 +444,8 @@ class PortfolioSimulationApp:
         print(f"\n [>] Starting Monte Carlo Simulation ({n_paths} paths)...")
         time.sleep(0.5)
 
+        start_time = time.time() if ENABLE_TIMING else 0.0
+
         all_navs = []
         paths_generated = 0
         print(f"     - Progress: 0/{n_paths} paths complete...", end='\r', flush=True)
@@ -439,10 +478,8 @@ class PortfolioSimulationApp:
             # Explicitly free memory.
             del scenarios
 
-        print() # Output newline on completion.
-
         if not all_navs:
-            print(" [!] Simulation produced no data.")
+            print("\n [!] Simulation produced no data.")
             time.sleep(0.5)
             return
 
@@ -456,12 +493,18 @@ class PortfolioSimulationApp:
             'control_nav_series': self.control_nav,
             'real_nav_series': self.real_nav
         }
-        
-        print(f" [+] Simulation complete. Generated {len(all_navs)} paths.")
+
+        time_step = time.time() - start_time
+
+        print(f"\n [+] Simulation complete. Generated {len(all_navs)} paths.")
+
+        if start_time > 0.0:
+            print(f"\n [t] Step 4: {time_step:.2f}s")
+
         time.sleep(0.5)
 
     # =========================================================================
-    # STEP 5: ANALYSIS
+    # STEP 5: ANALYSIS & Visualisation
     # =========================================================================
     def step_analyse(self) -> None:
         """
@@ -477,8 +520,10 @@ class PortfolioSimulationApp:
         if self.simulation_results is None: 
             return
 
-        self._print_section_header("STEP 5: ANALYTICS & VISUALISATION")
-        
+        self._print_section_header("STEP 5: ANALYSIS & VISUALISATION")
+
+        start_time = time.time() if ENABLE_TIMING else 0.0
+
         # --- Dynamic Output Folder Setup ---
         # Create unique subfolder to prevent overwrite.
         # Naming Convention: YYYYMMDD_HHMM_{InputFilename}_N{PathCount}
@@ -523,9 +568,16 @@ class PortfolioSimulationApp:
         
         # Save metric distributions (Sharpe/Vol).
         raw_stats.to_csv(os.path.join(output_dir, 'simulation_stats_dist.csv'))
-        print(" [+] Saved CSVs: summary, paths, and distribution stats.")
-        time.sleep(0.5)
 
+        time_step = time.time() - start_time
+
+        print("\n [+] Saved CSVs: summary, paths, and distribution stats.")
+
+        if start_time > 0.0:
+            print(f"\n [t] Step 5: {time_step:.2f}s")
+
+        time.sleep(0.5)
+        """
         # --- Visualization Generation ---
         # Display summary to provide feedback.
         print("\nPERFORMANCE SUMMARY:")
@@ -571,7 +623,7 @@ class PortfolioSimulationApp:
             raw_stats, 
             save_path=os.path.join(output_dir, '8_distribution_sharpe.png')
         )
-        
+        """
         print(f"\n [+] All analysis files saved to: {output_dir}")
         time.sleep(0.5)
         input(f"\n >> Press Enter to return to menu...")

@@ -248,7 +248,6 @@ class PortfolioAnalyser:
 
         if save_path:
             print(f" [>] Saving plot to {save_path}")
-            time.sleep(0.5)
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
 
         plt.show()
@@ -265,10 +264,13 @@ class PortfolioAnalyser:
         plt.figure(figsize=(12, 6))
         
         cols_to_plot = self.sims.columns[:min(len(self.sims.columns), num_paths)]
-        plt.plot(self.sims[cols_to_plot], color='gray', linewidth=0.5, alpha=0.2)
-
+        # 1. Plot actual simulation data (no label to avoid duplicate entries)
         plt.plot(self.real, color='red', linewidth=2.5, label='Real Portfolio')
         plt.plot(self.control, color='blue', linewidth=2, label='Control Portfolio')
+        plt.plot(self.sims[cols_to_plot], color='gray', linewidth=0.5, alpha=0.2)
+
+        # 2. Add a dummy line (empty data) just to create the single legend entry
+        plt.plot([], [], color='gray', linewidth=0.5, label='Simulated Portfolios')
         
         # plt.title(f'Monte Carlo Trace Analysis ({len(cols_to_plot)} paths)')
         plt.ylabel('Net Asset Value [CHF]')
@@ -279,7 +281,6 @@ class PortfolioAnalyser:
 
         if save_path:
             print(f" [>] Saving plot to {save_path}")
-            time.sleep(0.5)
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
 
         plt.show()
@@ -314,7 +315,6 @@ class PortfolioAnalyser:
         plt.plot(dd_sim, color='gray', linestyle=':', linewidth=1.5, label='Median Simulated Portfolio')
         plt.fill_between(dd_sim.index, dd_sim, 0, color='gray', alpha=0.1)
 
-        plt.title('Portfolio Drawdown Profile')
         plt.ylabel('Drawdown [%]')
         plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0, symbol=''))
         plt.legend()
@@ -324,7 +324,6 @@ class PortfolioAnalyser:
 
         if save_path:
             print(f" [>] Saving plot to {save_path}")
-            time.sleep(0.5)
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
 
         plt.show()
