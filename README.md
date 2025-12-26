@@ -17,7 +17,7 @@ This Python application reconstructs historical investment portfolios from Inter
     ```
 3.  **Provide Data**  
     **Portfolio Report** On IBKR navigate to Performance & Reports > Statements > Activity Statement, select any time period, and press Download CSV. Place the CSV file it in the `data/` folder of this application.  
-    **Saved States:** If existing simulation checkpoints exist (`.pkl` or `.pkl.gz`), they must be placed in the `data/saved_states/` folder to be recognized by the loader.  
+    **Saved States:** If existing simulation checkpoints exist (`.pkl` or `.pkl.gz`), they must be placed in the `data/saved_states/` folder to be recognised by the loader.  
 
 ---
 
