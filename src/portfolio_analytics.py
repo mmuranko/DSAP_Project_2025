@@ -1,13 +1,12 @@
 """
 Portfolio Analytics Module.
 
-Provides the PortfolioAnalyser class for comparative performance analysis between 
+Defines the PortfolioAnalyser class for comparative performance analysis between 
 realised portfolio results, control baselines, and Monte Carlo simulation paths. 
 Calculates standard financial risk metrics (TWRR, Sharpe Ratio, Drawdown) and 
-generates visualisation assets for reporting.
+generates visualisation plots for reporting.
 """
-import time
-from typing import Optional, Any
+from typing import Optional, Any, Tuple, Dict
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -31,7 +30,7 @@ plt.rcParams.update({
 
 class PortfolioAnalyser:
     """
-    Comparative portfolio performance analysis and visualisation.
+    Performs comparative portfolio performance analysis and visualisation.
 
     Aligns three distinct data series (Real, Control, and Simulated) to a common 
     timeline and generates statistical summaries and plots to assess algorithmic 
@@ -58,15 +57,15 @@ class PortfolioAnalyser:
         self.sims = sim_paths_df
         self.rf = RISK_FREE_RATE
         
-        # Intersects indices to ensure metrics cover identical time periods for all datasets.
-        # Prevents result skewing caused by missing start/end dates in a single series.
+        # Intersect indices to ensure metrics cover identical time periods for all datasets.
+        # prevents result skewing caused by missing start/end dates in a single series.
         common_idx = self.real.index.intersection(self.sims.index).intersection(self.control.index)
         
         self.real = self.real.loc[common_idx]
         self.control = self.control.loc[common_idx]
         self.sims = self.sims.loc[common_idx]
 
-        # Aligns flows to the timeline (fills missing days with 0.0)
+        # Align flows to the timeline (fills missing days with 0.0).
         if flow_series is not None:
             if not isinstance(flow_series.index, pd.DatetimeIndex):
                 flow_series.index = pd.to_datetime(flow_series.index)
@@ -79,20 +78,27 @@ class PortfolioAnalyser:
     # ==========================================
     # INTERNAL CALCULATIONS
     # ==========================================
-    def _get_adjusted_returns_and_index(self, nav_series: pd.Series) -> tuple[pd.Series, pd.Series]:
+    def _get_adjusted_returns_and_index(self, nav_series: pd.Series) -> Tuple[pd.Series, pd.Series]:
         """
         Calculates daily returns adjusted for external cash flows.
+
+        Args:
+            nav_series (pd.Series): Daily Net Asset Value series.
+
+        Returns:
+            Tuple[pd.Series, pd.Series]:
+                - Adjusted daily returns.
+                - Wealth index (cumulative product of returns starting at 1.0).
         """
         if nav_series.empty: 
             return pd.Series(dtype=float), pd.Series(dtype=float)
 
-        # 1. Align flows: Ensure we subtract the flow specifically for the correct day.
-        # This handles cases where 'nav_series' might be a subset of the full timeline.
+        # 1. Align flows: Subtract flow specifically for the correct day.
+        # Handles cases where 'nav_series' is a subset of the full timeline.
         relevant_flows = self.flows.reindex(nav_series.index).fillna(0.0)
 
-        # 2. Subtract flow from ending NAV to derive "Organic End Value".
-        # Logic: If NAV jumped from 100 to 110 because you deposited 10, 
-        # organic_nav_end is 100. Return is 0%. (Correct)
+        # 2. Derive "Organic End Value".
+        # Logic: Subtracts flow from ending NAV to isolate performance impact.
         organic_nav_end = nav_series - relevant_flows
         
         prev_nav = nav_series.shift(1)
@@ -107,9 +113,16 @@ class PortfolioAnalyser:
         
         return returns, wealth_index
     
-    def _calculate_metrics(self, series: pd.Series) -> dict[str, float]:
+    def _calculate_metrics(self, series: pd.Series) -> Dict[str, float]:
         """
-        Calculates metrics with specific handling for sub-year durations.
+        Calculates performance metrics with handling for sub-year durations.
+
+        Args:
+            series (pd.Series): Daily Net Asset Value series.
+
+        Returns:
+            Dict[str, float]: Dictionary containing TWRR, Volatility, Sharpe Ratio,
+            and Max Drawdown.
         """
         if series.empty: return {}
         
@@ -118,74 +131,109 @@ class PortfolioAnalyser:
         days = (series.index[-1] - series.index[0]).days
         if days <= 0: return {}
         
-        # 1. Period TWRR (Cumulative Return)
-        # This is what IBKR reports for periods < 1 Year.
-        # Example: Month 1 is +3%, Month 2 is -1%. Total is approx +1.97%.
+        # 1. Period TWRR (Cumulative Return).
         period_twr = wealth_index.iloc[-1] / wealth_index.iloc[0] - 1
         
-        # 2. Annualized Return (Internal Use Only)
-        # We need this to calculate the Sharpe Ratio correctly. 
-        # (Sharpe = Annualized Return / Annualized Volatility).
-        # We generally do NOT display this to the user for <1yr periods to avoid confusion.
+        # 2. Annualized Return (CAGR).
         ann_factor = 365 / days
         annualized_ret = (1 + period_twr) ** ann_factor - 1
         
-        # 3. Volatility (Always Annualized)
-        # Standard deviation * sqrt(252)
+        # 3. Volatility (Annualized).
         vol = returns.std() * np.sqrt(252)
         
-        # 4. Sharpe Ratio
-        # Must compare apples to apples (Annualized Ret vs Annualized Vol)
+        # 4. Geometric Sharpe Ratio.
+        # Uses CAGR (Geometric Mean) rather than Arithmetic Mean.
         excess_ret = annualized_ret - self.rf
         sharpe = excess_ret / vol if vol > 1e-9 else 0.0
         
-        # 5. Maximum Drawdown
+        # 5. Maximum Drawdown.
         roll_max = wealth_index.cummax()
         drawdown = (wealth_index - roll_max) / roll_max
         max_dd = drawdown.min()
         
         return {
-            'Period_TWRR': period_twr,  # <--- The metric matching your PDF
-            'Volatility': vol,
-            'Sharpe': sharpe,
-            'Max_DD': max_dd,
-            'Final_NAV': series.iloc[-1]
+            'Final NAV': series.iloc[-1],
+            'Period TWRR': period_twr,
+            'Annualised TWRR': annualized_ret,
+            'Annualised Volatility': vol,
+            'Geometric Sharpe Ratio': sharpe,
+            'Maximum Drawdown': max_dd
         }
+    
+    def get_simulation_distributions(self) -> pd.DataFrame:
+        """
+        Calculates performance metrics for every individual simulation path.
+        
+        Returns:
+            pd.DataFrame: DataFrame where rows correspond to simulation paths and
+            columns correspond to performance metrics (Final NAV, Sharpe, etc.),
+            formatted for plotting functions.
+        """
+        # Calculate metrics for all simulation paths
+        sim_metrics = [self._calculate_metrics(self.sims[col]) for col in self.sims.columns]
+        df_sim = pd.DataFrame(sim_metrics)
+        
+        return df_sim
+    
+    def get_statistics_summary(self, sim_stats: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        """
+        Generates a comprehensive statistical summary comparing Real, Control, 
+        and Simulated portfolios.
+        
+        Args:
+            sim_stats (Optional[pd.DataFrame]): Pre-calculated simulation distributions. 
+                Calculates automatically if None.
 
-    def get_summary_table(self) -> tuple[pd.DataFrame, pd.DataFrame, object | None]:
+        Returns:
+            pd.DataFrame: Summary table containing Medians and Percentile Ranks.
         """
-        Aggregates performance metrics using the new Period_TWRR label.
-        """
-        stats_real = self._calculate_metrics(self.real)
-        stats_control = self._calculate_metrics(self.control)
+        # 1. Retrieve Distribution Data.
+        if sim_stats is None:
+            df_sim = self.get_simulation_distributions()
+        else:
+            df_sim = sim_stats
+
+        # 2. Calculate Single-Point Metrics for Real/Control.
+        real_stats = self._calculate_metrics(self.real)
+        control_stats = self._calculate_metrics(self.control)
         
-        # Compute metrics per path
-        sim_metrics = []
-        for col in self.sims.columns:
-            sim_metrics.append(self._calculate_metrics(self.sims[col]))
-        
-        df_sim_stats = pd.DataFrame(sim_metrics)
-        stats_sim_avg = df_sim_stats.mean().to_dict()
-        
-        # Create Summary DataFrame
-        df = pd.DataFrame([stats_real, stats_control, stats_sim_avg], 
-                          index=['Real Portfolio', 'Control Portfolio', 'Simulated (Avg)'])
-        
-        # Updated Format Map with clearer labels
-        format_map: dict[str, Any] = {
-            'Period_TWRR': '{:.2%}',    # Shows 5.00% instead of 21.5%
-            'Volatility': '{:.2%}',
-            'Sharpe': '{:.2f}',
-            'Max_DD': '{:.2%}',
-            'Final_NAV': '{:,.0f}'
+        # 3. Map display names to data columns.
+        metric_map = {
+            "Final NAV": ("Final NAV", "Final NAV"),
+            "Period TWRR": ("Period TWRR", "Period TWRR"),
+            "Annualised TWRR": ("Annualised TWRR", "Annualised TWRR"),
+            "Annualised Volatility": ("Annualised Volatility", "Annualised Volatility"),
+            "Geometric Sharpe Ratio": ("Geometric Sharpe Ratio", "Geometric Sharpe Ratio"),
+            "Maximum Drawdown": ("Maximum Drawdown", "Maximum Drawdown")
         }
         
-        try:
-            df_styled = df.style.format(format_map)
-        except (ImportError, AttributeError):
-            df_styled = None 
+        data = {}
         
-        return df, df_sim_stats, df_styled
+        for row_name, (sim_col, single_col) in metric_map.items():
+            # Extract data arrays.
+            sim_dist = df_sim[sim_col].to_numpy(dtype=float)
+            
+            # Calculate Median.
+            sim_median = np.median(sim_dist)
+            
+            # Calculate Percentiles.
+            ctrl_val = control_stats[single_col]
+            real_val = real_stats[single_col]
+
+            # Calculate percentile rank (percentage of sims <= target).
+            ctrl_pct = (sim_dist <= ctrl_val).mean() * 100
+            real_pct = (sim_dist <= real_val).mean() * 100
+            
+            data[row_name] = {
+                "Median Simulated Portfolio": sim_median,
+                "Control Portfolio": ctrl_val,
+                "Control Portfolio Percentile": ctrl_pct,
+                "Real Portfolio": real_val,
+                "Real Portfolio Percentile": real_pct
+            }
+            
+        df = pd.DataFrame(data).T
+        return df
 
     # ==========================================
     # VISUALISATION METHODS
@@ -195,10 +243,11 @@ class PortfolioAnalyser:
         Generates plot comparing Real and Control portfolios against 
         Monte Carlo simulation confidence intervals.
 
-        Displays:
-        - 90% Confidence Interval (5th-95th percentile)
-        - 50% Confidence Interval (25th-75th percentile)
-        - Median Simulated Path
+        Visualizes 90% and 50% confidence intervals alongside the median 
+        simulated path.
+
+        Args:
+            save_path (Optional[str]): File path to export the plot image.
         """
         plt.figure(figsize=(12, 6))
 
@@ -249,6 +298,7 @@ class PortfolioAnalyser:
         Args:
             num_paths (int): Maximum number of random paths to overlay. 
                 Defaults to 150 to prevent overplotting.
+            save_path (Optional[str]): File path to export the plot image.
         """
         plt.figure(figsize=(12, 6))
 
@@ -291,6 +341,9 @@ class PortfolioAnalyser:
 
         Compares drawdown depth and recovery duration of Real and Control portfolios 
         against the median drawdown of simulated portfolios.
+
+        Args:
+            save_path (Optional[str]): File path to export the plot image.
         """
         plt.figure(figsize=(12, 4))
 
@@ -340,16 +393,22 @@ class PortfolioAnalyser:
         plt.show()
 
     def plot_distributions_NAV(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
-        """Generates histogram for Final Net Asset Value (NAV)."""
+        """
+        Generates histogram for Final Net Asset Value (NAV).
+
+        Args:
+            sim_raw_stats (pd.DataFrame): DataFrame containing 'Final NAV' column.
+            save_path (Optional[str]): File path to export the plot image.
+        """
         fig, ax = plt.subplots(figsize=(10, 6))
 
         total_n = self.sims.shape[1]
-        mean_val = sim_raw_stats['Final_NAV'].mean()
+        mean_val = sim_raw_stats['Final NAV'].mean()
 
         # Reduced target_ticks to 5 to prevent label overlap on large currency values
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Final_NAV'], target_ticks=5)
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Final NAV'], target_ticks=5)
         
-        sns.histplot(data=sim_raw_stats, x='Final_NAV', bins=bins, kde=True, ax=ax, color='skyblue')
+        sns.histplot(data=sim_raw_stats, x='Final NAV', bins=bins, kde=True, ax=ax, color='skyblue')
         self._add_lines(ax, self.real.iloc[-1], self.control.iloc[-1], mean_val)
 
         # Add Dynamic N label
@@ -362,7 +421,7 @@ class PortfolioAnalyser:
                fontweight='normal',
                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
-        ax.set_xlabel("Net Asset Value [CHF]")
+        ax.set_xlabel("Final Net Asset Value [CHF]")
         ax.set_ylabel("Count")
         
         # Apply the calculated stride
@@ -371,23 +430,29 @@ class PortfolioAnalyser:
 
         plt.tight_layout()
         if save_path:
-            print(f" [>] Saving NAV plot to {save_path}")
+            print(f" [>] Saving Final NAV plot to {save_path}")
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
         plt.show()
 
     def plot_distributions_maxdd(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
-        """Generates histogram for Maximum Drawdown."""
+        """
+        Generates histogram for Maximum Drawdown.
+
+        Args:
+            sim_raw_stats (pd.DataFrame): DataFrame containing 'Maximum Drawdown' column.
+            save_path (Optional[str]): File path to export the plot image.
+        """
         fig, ax = plt.subplots(figsize=(10, 6))
 
         total_n = self.sims.shape[1]
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
-        mean_val = sim_raw_stats['Max_DD'].mean()
+        mean_val = sim_raw_stats['Maximum Drawdown'].mean()
 
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Max_DD'])
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Maximum Drawdown'])
         
-        sns.histplot(data=sim_raw_stats, x='Max_DD', bins=bins, kde=True, ax=ax, color='salmon')
-        self._add_lines(ax, real_stats['Max_DD'], control_stats['Max_DD'], mean_val)
+        sns.histplot(data=sim_raw_stats, x='Maximum Drawdown', bins=bins, kde=True, ax=ax, color='salmon')
+        self._add_lines(ax, real_stats['Maximum Drawdown'], control_stats['Maximum Drawdown'], mean_val)
 
         # Add Dynamic N label
         loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
@@ -406,23 +471,29 @@ class PortfolioAnalyser:
 
         plt.tight_layout()
         if save_path:
-            print(f" [>] Saving MaxDD plot to {save_path}")
+            print(f" [>] Saving Maximum Drawdown plot to {save_path}")
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
         plt.show()
 
     def plot_distributions_volatility(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
-        """Generates histogram for Volatility."""
+        """
+        Generates histogram for Volatility.
+
+        Args:
+            sim_raw_stats (pd.DataFrame): DataFrame containing 'Annualised Volatility' column.
+            save_path (Optional[str]): File path to export the plot image.
+        """
         fig, ax = plt.subplots(figsize=(10, 6))
 
         total_n = self.sims.shape[1]
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
-        mean_val = sim_raw_stats['Volatility'].mean()
+        mean_val = sim_raw_stats['Annualised Volatility'].mean()
 
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Volatility'])
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Annualised Volatility'])
         
-        sns.histplot(data=sim_raw_stats, x='Volatility', bins=bins, kde=True, ax=ax, color='lightgreen')
-        self._add_lines(ax, real_stats['Volatility'], control_stats['Volatility'], mean_val)
+        sns.histplot(data=sim_raw_stats, x='Annualised Volatility', bins=bins, kde=True, ax=ax, color='lightgreen')
+        self._add_lines(ax, real_stats['Annualised Volatility'], control_stats['Annualised Volatility'], mean_val)
 
         # Add Dynamic N label
         loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
@@ -446,7 +517,13 @@ class PortfolioAnalyser:
         plt.show()
 
     def plot_distributions_TWRR(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
-        """Generates histogram for Period TWRR (Cumulative Return)."""
+        """
+        Generates histogram for Period TWRR (Cumulative Return).
+
+        Args:
+            sim_raw_stats (pd.DataFrame): DataFrame containing 'Period TWRR' column.
+            save_path (Optional[str]): File path to export the plot image.
+        """
         fig, ax = plt.subplots(figsize=(10, 6))
 
         total_n = self.sims.shape[1]
@@ -455,12 +532,12 @@ class PortfolioAnalyser:
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
         
-        mean_val = sim_raw_stats['Period_TWRR'].mean()
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Period_TWRR'])
+        mean_val = sim_raw_stats['Period TWRR'].mean()
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Period TWRR'])
         
-        sns.histplot(data=sim_raw_stats, x='Period_TWRR', bins=bins, kde=True, ax=ax, color='orchid')
+        sns.histplot(data=sim_raw_stats, x='Period TWRR', bins=bins, kde=True, ax=ax, color='orchid')
         
-        self._add_lines(ax, real_stats['Period_TWRR'], control_stats['Period_TWRR'], mean_val)
+        self._add_lines(ax, real_stats['Period TWRR'], control_stats['Period TWRR'], mean_val)
 
         # Add Dynamic N label (Standard boilerplate)
         loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
@@ -472,30 +549,36 @@ class PortfolioAnalyser:
                fontweight='normal',
                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
-        ax.set_xlabel("Cumulative Period Return [%]") 
+        ax.set_xlabel("Period TWRR [%]") 
         ax.set_ylabel("Count")
         ax.set_xticks(bins[::stride])
         ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=0, symbol=''))
 
         plt.tight_layout()
         if save_path:
-            print(f" [>] Saving TWRR plot to {save_path}")
+            print(f" [>] Saving Period TWRR plot to {save_path}")
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
         plt.show()
     
     def plot_distributions_sharpe(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
-        """Generates histogram for Sharpe Ratio."""
+        """
+        Generates histogram for Sharpe Ratio.
+
+        Args:
+            sim_raw_stats (pd.DataFrame): DataFrame containing 'Geometric Sharpe Ratio' column.
+            save_path (Optional[str]): File path to export the plot image.
+        """
         fig, ax = plt.subplots(figsize=(10, 6))
 
         total_n = self.sims.shape[1]
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
-        mean_val = sim_raw_stats['Sharpe'].mean()
+        mean_val = sim_raw_stats['Geometric Sharpe Ratio'].mean()
 
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Sharpe'])
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Geometric Sharpe Ratio'])
         
-        sns.histplot(data=sim_raw_stats, x='Sharpe', bins=bins, kde=True, ax=ax, color='gold')
-        self._add_lines(ax, real_stats['Sharpe'], control_stats['Sharpe'], mean_val)
+        sns.histplot(data=sim_raw_stats, x='Geometric Sharpe Ratio', bins=bins, kde=True, ax=ax, color='gold')
+        self._add_lines(ax, real_stats['Geometric Sharpe Ratio'], control_stats['Geometric Sharpe Ratio'], mean_val)
 
         # Add Dynamic N label
         loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
@@ -507,19 +590,27 @@ class PortfolioAnalyser:
                fontweight='normal',
                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
-        ax.set_xlabel("Sharpe Ratio")
+        ax.set_xlabel("Geometric Sharpe Ratio")
         ax.set_ylabel("Count")
         ax.set_xticks(bins[::stride])
         ax.xaxis.set_major_formatter(mtick.FormatStrFormatter('%.2f'))
 
         plt.tight_layout()
         if save_path:
-            print(f" [>] Saving Sharpe plot to {save_path}")
+            print(f" [>] Saving Sharpe Ratio plot to {save_path}")
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
         plt.show()
 
     def _add_lines(self, ax: Axes, real_val: float, control_val: float, mean_val: float) -> None:
-        """Adds vertical reference lines to histograms."""
+        """
+        Adds vertical reference lines to histograms.
+
+        Args:
+            ax (Axes): Matplotlib Axes object.
+            real_val (float): Value for the Real Portfolio.
+            control_val (float): Value for the Control Portfolio.
+            mean_val (float): Mean value of the simulation distribution.
+        """
         ax.axvline(real_val, color='red', linestyle='-', linewidth=2, label='Real Portfolio')
         ax.axvline(control_val, color='blue', linestyle='--', linewidth=2, label='Control Portfolio')
         ax.axvline(mean_val, color='black', linestyle=':', linewidth=2, label='Distribution Mean') 
@@ -528,7 +619,17 @@ class PortfolioAnalyser:
     def _get_dynamic_bins_and_stride(self, data: pd.Series, target_bins: int = 40, target_ticks: int = 8) -> tuple[np.ndarray, int]:
         """
         Calculates optimal histogram bin edges and tick stride.
-        Ensures ticks fall on nice integers (multiples of 1, 2, 5, 10).
+        Ensures ticks fall on integers or clean decimals (multiples of 1, 2, 5, 10).
+
+        Args:
+            data (pd.Series): The dataset to bin.
+            target_bins (int): Desired number of histogram bins.
+            target_ticks (int): Desired number of x-axis ticks.
+
+        Returns:
+            Tuple[np.ndarray, int]:
+                - Array of bin edges.
+                - Integer stride for tick labeling.
         """
         val_range = data.max() - data.min()
         if val_range <= 0: 

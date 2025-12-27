@@ -2,13 +2,13 @@
 Portfolio Simulation Application Entry Point.
 
 Executes the Portfolio Reconstruction and Monte Carlo Simulation framework.
-Manages sequential dependencies between data ingestion, market data acquisition,
-control portfolio reconstruction, and stochastic simulation generation.
+Coordinates data ingestion, market data acquisition, control portfolio 
+reconstruction, and stochastic simulation generation.
 
 Implements a state-machine architecture to ensure data integrity across execution
-steps, preventing the use of stale datasets or invalid configurations. Handles
-user interaction via a menu-driven command-line interface (CLI) to support
-reproducible analysis and persistent storage of simulation artifacts.
+steps, prohibiting the use of stale datasets or invalid configurations. Manages
+user interaction via a CLI to support reproducible analysis and persistent 
+storage of simulation artifacts.
 """
 import os
 import sys
@@ -19,14 +19,14 @@ import time
 from datetime import datetime
 from typing import Callable
 
-# --- Import Custom Modules ---
-# data_loader (dl): Parsing and ingestion of raw broker reports.
-# data_processor (dp): Data cleaning and split adjustment logic.
-# market_data_loader (mdl): Fetching historical price data.
-# margin_rates (mr): Retrieval of historical margin rates.
-# simulation_engine (sim): Core stochastic simulation logic.
-# portfolio_reconstructor (pr): Rebuilds portfolios from trade logs.
-# portfolio_analytics: Statistical analysis and visualization.
+# --- Custom Module Imports ---
+# dl: Parses raw broker reports.
+# dp: Cleans data and adjusts for splits.
+# mdl: Fetches historical price data.
+# mr: Retrieves historical margin rates.
+# sim: Executes stochastic simulation logic.
+# pr: Rebuilds portfolios from trade logs.
+# PortfolioAnalyser: Performs statistical analysis and visualization.
 from src import data_loader as dl
 from src import data_processor as dp
 from src import market_data_loader as mdl
@@ -36,17 +36,16 @@ from src import portfolio_reconstructor as pr
 from src.portfolio_analytics import PortfolioAnalyser
 
 # --- Configuration Constants ---
-# Default input path used if file selection is skipped.
-# Directory containing raw input reports
+# Directory containing raw input reports.
 DATA_DIR = r'data' 
 
 # Default input path used if file selection is skipped.
 DEFAULT_REPORT_PATH = r'data\U13271915_20241224_20251224.csv'
 
-# Directory for persistent application state storage (pickled sessions).
+# Directory for persistent application state storage.
 CHECKPOINT_DIR = r'data/saved_states'
 
-# Simulation configuration:
+# Simulation configuration.
 # 150 paths: Balances statistical significance with runtime.
 # Batch size 50: Limits memory consumption during vectorized operations.
 SIMULATION_SEED = 42
@@ -64,9 +63,9 @@ class PortfolioSimulationApp:
     """
     def __init__(self) -> None:
         """
-        Initialize application state and artifact storage.
+        Initializes application state and artifact storage.
         """
-        # Data containers act as state flags. 
+        # State flags. 
         # None indicates the specific processing step has not occurred.
         self.raw_data = None
         self.clean_data = None
@@ -84,14 +83,14 @@ class PortfolioSimulationApp:
         self.real_nav = None
         self.simulation_results = None 
         
-        # Ensure checkpoint directory exists to prevent IOErrors on save.
+        # Create checkpoint directory to prevent IOError on save.
         os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     def menu(self) -> None:
         """
-        Display main menu and route input to pipeline steps.
+        Displays the main menu and routes user input to pipeline steps.
 
-        Loop continues until explicit exit command.
+        Maintains the event loop until an explicit exit command is received.
         """
         while True:
             self._print_header()
@@ -108,8 +107,7 @@ class PortfolioSimulationApp:
             print(" Q. Quit")
             print("-" * 60)
             
-            # Construct dynamic status line to track pipeline progress.
-            # Visual indicator for completed steps.
+            # Construct dynamic status indicator to track pipeline progress.
             flags = []
             flags.append("DATA: OK" if self.clean_data else "DATA: --")
             flags.append("MARKET: OK" if self.engine else "MARKET: --")
@@ -121,12 +119,6 @@ class PortfolioSimulationApp:
 
             choice = input(" >> Select Option: ").upper().strip()
             time.sleep(0.5)
-
-            """
-            start_time_0 = time.time() if ENABLE_TIMING else 0.0
-            time_step_load_data = time.time() - start_time_0
-                    print(f" [t] Step 1 - Parse IBKR Report: {time_step_load_data:.2f}s")
-            """
 
             if choice == '0':
                 # Force state reset to ensure clean pipeline execution.
@@ -177,12 +169,14 @@ class PortfolioSimulationApp:
         Ingests the raw IBKR activity report.
 
         Parses CSV, applies split adjustments, and isolates capital flow events 
-        (deposits/withdrawals). Invalidates downstream data to prevent state 
-        inconsistencies.
+        (deposits/withdrawals). Resets downstream state to enforce consistency.
+
+        Returns:
+            None
         """
         self._print_section_header("STEP 1: DATA LOADING")
 
-        # Invalidates downstream components to force recalculation.
+        # Reset downstream components to force recalculation.
         self.market_data = None
         self.daily_rates = None
         self.engine = None
@@ -196,13 +190,13 @@ class PortfolioSimulationApp:
         files = []
         if os.path.exists(DATA_DIR):
             files = [f for f in os.listdir(DATA_DIR) if f.lower().endswith('.csv')]
-            # Sorts by modification time (newest first).
+            # Sort by modification time (newest first).
             files.sort(key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)), reverse=True)
 
         path = None
 
         if files:
-            # Loop until a valid selection is made
+            # Iterate until valid input is received.
             while True:
                 print(f"\n Available Reports in '{DATA_DIR}':")
                 print("   [0] Manual Path Entry")
@@ -213,18 +207,18 @@ class PortfolioSimulationApp:
                 time.sleep(0.5)
 
                 if not choice:
-                    # Default to the newest file
+                    # Default to the newest file.
                     path = os.path.join(DATA_DIR, files[0])
-                    break # Exit loop
+                    break 
                 elif choice == '0':
-                    path = None # Trigger manual entry logic below
-                    break # Exit loop
+                    path = None # Trigger manual entry logic.
+                    break 
                 else:
                     try:
                         file_idx = int(choice) - 1
                         if 0 <= file_idx < len(files):
                             path = os.path.join(DATA_DIR, files[file_idx])
-                            break # Exit loop
+                            break 
                         else:
                             print(" [!] Number out of range. Please try again.")
                             time.sleep(1)
@@ -232,7 +226,7 @@ class PortfolioSimulationApp:
                         print(" [!] Invalid input. Please enter a number.")
                         time.sleep(1)
 
-        # Fallback: Manual Entry (if no files found or user selected 0)
+        # Fallback: Prompt for manual path entry if selection fails.
         if path is None:
             path = input(f" >> Enter path to CSV [Default: {DEFAULT_REPORT_PATH}]: ").strip()
             time.sleep(0.5)
@@ -242,7 +236,7 @@ class PortfolioSimulationApp:
 
         print(f" [>] Loading: {path}")
 
-        # Verifies file existence.
+        # Verify file existence.
         if not os.path.exists(path):
             print(f"\n [!] Error: File not found at {path}")
             time.sleep(0.5)
@@ -250,41 +244,41 @@ class PortfolioSimulationApp:
         
         start_time = time.time() if ENABLE_TIMING else 0.0
 
-        # Stores filename for output directory naming.
+        # Store filename for output directory naming.
         self.report_name = os.path.basename(path)
 
-        # Parses raw IBKR CSV into structured DataFrame.
+        # Parse raw IBKR CSV into structured DataFrame.
         self.raw_data = dl.load_ibkr_report(path)
 
         if self.raw_data is not None:
-            # Applies stock split adjustments to historical holdings.
+            # Apply stock split adjustments to historical holdings.
             self.clean_data = dp.apply_split_adjustments(self.raw_data)
         else:
             print("\n [!] Data load failed.")
             time.sleep(0.5)
             return
 
-        # Extracts events DataFrame safely.
+        # Extract events DataFrame safely.
         events_df = self.clean_data.get('events') if self.clean_data is not None else None
 
-        # Processes capital flows or initializes empty structures.
+        # Process capital flows or initialize empty structures.
         if events_df is None or events_df.empty:
             self.flow_events_df = pd.DataFrame(columns=['timestamp', 'event_type', 'cash_change_native', 'currency'])
             self.flow_series = pd.Series(dtype=float)
         else:
-            # Validates schema.
+            # Validate schema.
             required_cols = {'cash_change_native', 'event_type', 'timestamp'}
             if not required_cols.issubset(events_df.columns):
                 raise KeyError(f"events DataFrame must contain columns: {required_cols}")
 
-            # Filters DEPOSIT and WITHDRAWAL events; normalizes timestamps.
+            # Filter DEPOSIT and WITHDRAWAL events; normalize timestamps.
             flows = events_df[events_df['event_type'].isin(['DEPOSIT', 'WITHDRAWAL'])].copy()
             flows['timestamp'] = pd.to_datetime(flows['timestamp']).dt.normalize()
 
-            # Retains filtered event-level DataFrame for traceability.
+            # Retain filtered event-level DataFrame for traceability.
             self.flow_events_df = flows
 
-            # Aggregates daily net flows (amounts assumed in Base Currency).
+            # Aggregate daily net flows (amounts assumed in Base Currency).
             self.flow_series = flows.groupby('timestamp')['cash_change_native'].sum().sort_index()
 
         time_step = time.time() - start_time
@@ -297,13 +291,16 @@ class PortfolioSimulationApp:
     # =========================================================================
     def step_fetch_market_data(self) -> None:
         """
-        Execute Step 2: Acquire historical market data and margin rates.
+        Executes Step 2: Acquire historical market data and margin rates.
 
         Fetches market data via yfinance API and margin rates via hybrid scraper. 
         Invalidates downstream simulation results to maintain state consistency.
+
+        Returns:
+            None
         """
         # --- Dependency Check ---
-        # Verify Step 1 completion.
+        # Validate data loading prerequisite.
         self._check_dependency(self.clean_data is not None, "Step 1 (Load Data)", self.step_load_data)
         if self.clean_data is None: 
             return
@@ -349,14 +346,17 @@ class PortfolioSimulationApp:
     # =========================================================================
     def step_control_reconstruction(self) -> None:
         """
-        Execute Step 3: Reconstruct Real and Control Portfolios.
+        Executes Step 3: Reconstruct Real and Control Portfolios.
 
-        'Real Portfolio': Reconstructed from trade logs.
+        'Real Portfolio': Reconstructed from actual trade logs.
         'Control Portfolio': Generated by passing trade history through the 
         simulation engine to normalize fees and execution timing.
+
+        Returns:
+            None
         """
         # --- Dependency Check ---
-        # Verify simulation engine initialization.
+        # Validate simulation engine initialization.
         self._check_dependency(self.engine is not None, "Step 2 (Market Data)", self.step_fetch_market_data)
         if self.engine is None: 
             return
@@ -379,7 +379,7 @@ class PortfolioSimulationApp:
         print(f"\n     - Real Portfolio Final NAV: {final_nav:,.2f}\n")
         time.sleep(0.5)
 
-        # Process actual trades through simulation logic to create Control baseline.
+        # Simulate trade history to establish the Control baseline.
         # This provides a methodological comparison for random paths.
         control_scenario = self.engine.run_real_with_sim_logic()[0]
         self.control_res = pr.reconstruct_portfolio(control_scenario, self.market_data, verbose=False)
@@ -402,10 +402,13 @@ class PortfolioSimulationApp:
     # =========================================================================
     def step_run_simulation(self) -> None:
         """
-        Execute Step 4: Monte Carlo Simulation.
+        Executes Step 4: Monte Carlo Simulation.
 
         Generates N random counterfactual portfolio paths based on tradable assets. 
         Batches results to manage memory usage.
+
+        Returns:
+            None
         """
         # --- Dependency Check ---
         self._check_dependency(self.control_nav is not None, "Step 3 (Control Portfolio)", self.step_control_reconstruction)
@@ -414,7 +417,7 @@ class PortfolioSimulationApp:
 
         self._print_section_header("STEP 4: MONTE CARLO SIMULATION")
 
-        # Guard against uninitialized engine.
+        # Validate engine initialization.
         if self.engine is None:
             print(" [!] Engine is not initialized. Please run Step 2 first.")
             return
@@ -451,7 +454,7 @@ class PortfolioSimulationApp:
         print(f"     - Progress: 0/{n_paths} paths complete...", end='\r', flush=True)
         
         # --- Simulation Loop ---
-        # Process simulation in batches to control memory footprint.
+        # Iterate in batches to limit memory usage.
         for batch_start in range(0, n_paths, BATCH_SIZE):
             # Calculate current batch size handling final remainder.
             current_batch_size = min(BATCH_SIZE, n_paths - batch_start)
@@ -504,19 +507,26 @@ class PortfolioSimulationApp:
         time.sleep(0.5)
 
     # =========================================================================
-    # STEP 5: ANALYSIS & Visualisation
+    # STEP 5: ANALYSIS & VISUALIZATION
     # =========================================================================
     def step_analyse(self) -> None:
         """
-        Execute Step 5: Statistical Analysis and Visualization.
+        Executes Step 5: Statistical Analysis and Visualization.
 
-        Analyzes simulation results to produce performance summaries, exports CSVs 
-        for external validation, and generates standardized plots in a 
-        timestamped directory.
+        Performs statistical analysis on simulation results, exports performance
+        summaries to CSV, and generates standardized visualization plots in a 
+        dedicated output directory.
+
+        Returns:
+            None
         """
         # --- Dependency Check ---
-        # Verify simulation data exists.
-        self._check_dependency(self.simulation_results is not None, "Step 4 (Simulation)", self.step_run_simulation)
+        # Verifies the existence of simulation results before proceeding.
+        self._check_dependency(
+            self.simulation_results is not None, 
+            "Step 4 (Simulation)", 
+            self.step_run_simulation
+        )
         if self.simulation_results is None: 
             return
 
@@ -525,30 +535,30 @@ class PortfolioSimulationApp:
         start_time = time.time() if ENABLE_TIMING else 0.0
 
         # --- Dynamic Output Folder Setup ---
-        # Create unique subfolder to prevent overwrite.
-        # Naming Convention: YYYYMMDD_HHMM_{InputFilename}_N{PathCount}
+        # Constructs a unique output directory based on the report name and 
+        # simulation path count to prevent data overwrites.
+        # Format: {ReportName}_N{PathCount}
         
-        # Extract path count for context.
         n_paths = self.simulation_results['simulated_paths'].shape[1]
-        
-        # Retrieve input filename tag.
         input_tag = getattr(self, 'report_name', 'Unknown').replace('.csv', '')
         
         folder_name = f"{input_tag}_N{n_paths}"
         output_dir = os.path.join('results', folder_name)
         
-        # Create output directory.
         os.makedirs(output_dir, exist_ok=True)
         print(f" [+] Created output directory: {output_dir}")
         time.sleep(0.5)
 
-        # --- Retrieve Flow Data ---
-        # Retrieve from active state or results dictionary.
+        # --- Data Retrieval ---
+        # Retrieves flow series data, defaulting to the results dictionary 
+        # if the attribute is missing from the active state.
         flow_series = getattr(self, 'flow_series', None)
         
         if flow_series is None:
             flow_series = self.simulation_results.get('flow_series', pd.Series(dtype=float))
 
+        # --- Analyzer Initialization ---
+        # Instantiates the PortfolioAnalyser with the required simulation datasets.
         analyser = PortfolioAnalyser(
             real_nav=self.simulation_results['real_nav_series'],
             control_nav=self.simulation_results['control_nav_series'],
@@ -556,22 +566,25 @@ class PortfolioSimulationApp:
             flow_series=flow_series
         )
 
-        # --- Data Preservation (CSV) ---
-        # Calculate statistics once to ensure consistency between CSVs and plots.
-        summary_df, raw_stats, _ = analyser.get_summary_table()
+        # --- Statistical Calculation ---
+        # Generates raw distribution metrics required for downstream plotting.
+        raw_stats = analyser.get_simulation_distributions()
         
-        # Persist high-level summary.
-        summary_df.to_csv(os.path.join(output_dir, 'performance_summary.csv'))
+        # Compiles summary statistics using pre-calculated distributions 
+        # to optimize performance.
+        stat_summary = analyser.get_statistics_summary(sim_stats=raw_stats)
         
-        # Save full daily data for all simulated paths.
-        self.simulation_results['simulated_paths'].to_csv(os.path.join(output_dir, 'monte_carlo_paths.csv'))
+        # Outputs summary to console.
+        print("\nStatistics Summary:")
+        print(stat_summary)
         
-        # Save metric distributions (Sharpe/Vol).
-        raw_stats.to_csv(os.path.join(output_dir, 'simulation_stats_dist.csv'))
+        # Exports statistics summary and raw distribution data to CSV.
+        stat_summary.to_csv(os.path.join(output_dir, 'statistics_summary.csv'))
+        raw_stats.to_csv(os.path.join(output_dir, 'simulation_distributions.csv'), index=False)
 
         time_step = time.time() - start_time
 
-        print("\n [+] Saved CSVs: summary, paths, and distribution stats.")
+        print("\n [+] Saved Statistics Data")
 
         if start_time > 0.0:
             print(f"\n [t] Step 5: {time_step:.2f}s")
@@ -579,13 +592,7 @@ class PortfolioSimulationApp:
         time.sleep(0.5)
 
         # --- Visualization Generation ---
-        # Display summary to provide feedback.
-        print("\nPERFORMANCE SUMMARY:")
-        print( summary_df)
-        print("\n [>] Launching visualisation windows...\n")
-        time.sleep(1.0)
-
-        # Generate and save plots sequentially.
+        # Generates and saves specific performance plots.
         analyser.plot_confidence_intervals(
             save_path=os.path.join(output_dir, '1_confidence_intervals.png')
         )
@@ -634,10 +641,13 @@ class PortfolioSimulationApp:
     # =========================================================================
     def _reset_state(self) -> None:
         """
-        Clear loaded data and processing results.
+        Clears loaded data and processing results.
 
         Resets all state variables to None to ensure subsequent pipeline runs 
         do not inherit stale data from previous sessions.
+
+        Returns:
+            None
         """
         print("\n [!] Clearing previous application state...")
         time.sleep(0.5)
@@ -661,10 +671,13 @@ class PortfolioSimulationApp:
 
     def _print_section_header(self, title: str) -> None:
         """
-        Display formatted section header.
+        Displays formatted section header.
 
         Args:
             title (str): Header text.
+        
+        Returns:
+            None
         """
         print("\n" + "="*60)
         print(f" {title}")
@@ -672,9 +685,9 @@ class PortfolioSimulationApp:
 
     def _check_dependency(self, condition: bool, fix_action_name: str, fix_action_func: Callable[[], None]) -> bool:
         """
-        Enforce pipeline integrity by verifying prerequisites.
+        Enforces pipeline integrity by verifying prerequisites.
 
-        If condition is not met, flags the missing dependency and automatically 
+        If the condition is not met, flags the missing dependency and automatically 
         triggers the corrective action.
 
         Args:
@@ -698,7 +711,10 @@ class PortfolioSimulationApp:
 
     def _print_header(self) -> None:
         """
-        Render main application title banner.
+        Renders main application title banner.
+
+        Returns:
+            None
         """
         print("\n" + "#"*60)
         print("       MONTE CARLO PORTFOLIO RECONSTRUCTION")
@@ -706,9 +722,12 @@ class PortfolioSimulationApp:
     
     def _save_checkpoint(self) -> None:
         """
-        Serialize current application state to a binary pickle file.
+        Serializes current application state to a binary pickle file.
 
-        Persists simulation results and loaded datasets.
+        Persists simulation results and loaded datasets using gzip compression.
+
+        Returns:
+            None
         """
         self._print_section_header("SAVING STATE")
         
@@ -756,9 +775,13 @@ class PortfolioSimulationApp:
 
     def _load_checkpoint(self) -> None:
         """
-        Deserialize application state from a binary pickle file.
+        Deserializes application state from a binary pickle file.
 
-        Restores datasets and simulation results; re-initializes simulation engine.
+        Restores datasets and simulation results, then re-initializes the
+        simulation engine.
+
+        Returns:
+            None
         """
         self._print_section_header("LOADING STATE")
 
