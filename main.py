@@ -577,7 +577,7 @@ class PortfolioSimulationApp:
             print(f"\n [t] Step 5: {time_step:.2f}s")
 
         time.sleep(0.5)
-        """
+
         # --- Visualization Generation ---
         # Display summary to provide feedback.
         print("\nPERFORMANCE SUMMARY:")
@@ -614,16 +614,16 @@ class PortfolioSimulationApp:
             save_path=os.path.join(output_dir, '6_distribution_volatility.png')
         )
 
-        analyser.plot_distributions_CAGR(
+        analyser.plot_distributions_TWRR(
             raw_stats, 
-            save_path=os.path.join(output_dir, '7_distribution_CAGR.png')
+            save_path=os.path.join(output_dir, '7_distribution_TWRR.png')
         )
 
         analyser.plot_distributions_sharpe(
             raw_stats, 
             save_path=os.path.join(output_dir, '8_distribution_sharpe.png')
         )
-        """
+
         print(f"\n [+] All analysis files saved to: {output_dir}")
         time.sleep(0.5)
         input(f"\n >> Press Enter to return to menu...")

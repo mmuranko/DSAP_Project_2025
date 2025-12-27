@@ -53,33 +53,35 @@ When selecting `1. Parse IBKR Report` or `7. Load State`, the user can choose th
 ## Project Structure
 
 ```text
+DSAP_Project_2025/
+│   
 ├── data/
 │   ├── saved_states/               # Saved application states
 │   │   └── [data].pkl.gz
 │   └── [data].csv                  # Input IBKR Activity Reports
 │
 ├── results/                        
-│   ├── [run]/                      # Generated results data of each run is saved in a dedicated subfolder
+│   ├── [run]/                      # Generated results data of each run
 │   │   ├── [data].png
 │   │   └── [data].csv
 │   └── [data].png                  # Highlighted simulation results
 │
 ├── src/
 │   ├── __init__.py                 # Package initialisation
-│   ├── config.py                   # Information on the risk-free rate, currencies, exchanges, taxes, fees, and margin spreads
+│   ├── config.py                   # Global constants
 │   ├── data_loader.py              # Parses the IBKR CSV report
 │   ├── data_processor.py           # Split adjustment of the parsed data
 │   ├── margin_rates.py             # Hybrid interest rate scraper (IBKR & FRED)
 │   ├── market_data_loader.py       # Loads market data for relevant assets using yfinance
 │   ├── portfolio_analytics.py      # Analyses the simulation results and plots key results
-│   ├── portfolio_reconstructor.py  # Calculates the daily portfolio NAV from the initial state and event log
-│   └── simulation_engine.py        # Simulates counterfactual portfolio histories based on the initial state of the real portfolio
+│   ├── portfolio_reconstructor.py  # Daily NAV reconstruction
+│   └── simulation_engine.py        # Simulates counterfactual portfolio histories
 │
 ├── tests/
 │   ├── __init__.py                 # Package initialisation
-│   └── test.py                     # Tests the some of the internal logic of the application
+│   └── test.py                     # Unit tests for core logic
 │
-├── main.py                         # Application entry point
+├── main.py                         # CLI Entry point
 ├── requirements.txt                # Python dependencies
 │
 ├── README.md                       # Documentation

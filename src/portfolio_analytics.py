@@ -3,7 +3,7 @@ Portfolio Analytics Module.
 
 Provides the PortfolioAnalyser class for comparative performance analysis between 
 realised portfolio results, control baselines, and Monte Carlo simulation paths. 
-Calculates standard financial risk metrics (CAGR, Sharpe Ratio, Drawdown) and 
+Calculates standard financial risk metrics (TWRR, Sharpe Ratio, Drawdown) and 
 generates visualisation assets for reporting.
 """
 import time
@@ -81,29 +81,27 @@ class PortfolioAnalyser:
     # ==========================================
     def _get_adjusted_returns_and_index(self, nav_series: pd.Series) -> tuple[pd.Series, pd.Series]:
         """
-        Calculates daily returns adjusted for external cash flows (Deposits/Withdrawals).
-        
-        Returns:
-            tuple[pd.Series, pd.Series]: Daily return series and cumulative Wealth Index.
-        
-        Formula: r_t = (NAV_t - Flow_t) / NAV_{t-1} - 1
+        Calculates daily returns adjusted for external cash flows.
         """
         if nav_series.empty: 
             return pd.Series(dtype=float), pd.Series(dtype=float)
 
-        # Subtracts flow from ending NAV to derive "Organic End Value".
-        # Assumes flows occur before measurement or calculation.
-        organic_nav_end = nav_series - self.flows
+        # 1. Align flows: Ensure we subtract the flow specifically for the correct day.
+        # This handles cases where 'nav_series' might be a subset of the full timeline.
+        relevant_flows = self.flows.reindex(nav_series.index).fillna(0.0)
+
+        # 2. Subtract flow from ending NAV to derive "Organic End Value".
+        # Logic: If NAV jumped from 100 to 110 because you deposited 10, 
+        # organic_nav_end is 100. Return is 0%. (Correct)
+        organic_nav_end = nav_series - relevant_flows
         
         prev_nav = nav_series.shift(1)
         
-        # Calculates Return.
-        # Handles division by zero for the initial day or empty accounts.
+        # 3. Calculate Daily Return.
         returns = (organic_nav_end / prev_nav) - 1.0
         returns = returns.replace([np.inf, -np.inf], np.nan).fillna(0.0)
         
-        # Constructs Wealth Index (Start at 1.0).
-        # Normalizes t=0 to 1.0.
+        # 4. Construct Wealth Index (Start at 1.0).
         wealth_index = (1 + returns).cumprod()
         wealth_index.iloc[0] = 1.0 
         
@@ -111,75 +109,57 @@ class PortfolioAnalyser:
     
     def _calculate_metrics(self, series: pd.Series) -> dict[str, float]:
         """
-        Calculates key financial performance indicators for a NAV series.
-
-        Metrics:
-            - CAGR: Compound Annual Growth Rate.
-            - Volatility: Annualised standard deviation of daily returns.
-            - Sharpe Ratio: Risk-adjusted return relative to the risk-free rate.
-            - Maximum Drawdown: Largest peak-to-trough decline.
-
-        Args:
-            series (pd.Series): Time-series of Net Asset Values.
-
-        Returns:
-            dict[str, float]: Calculated metrics. Returns empty dict if series 
-            is empty or length is insufficient.
+        Calculates metrics with specific handling for sub-year durations.
         """
         if series.empty: return {}
         
-        # Calculates daily percentage returns.
         returns, wealth_index = self._get_adjusted_returns_and_index(series)
         
-        # 1. CAGR (Geometric Mean)
-        # Uses total return over the period, annualised by day count.
         days = (series.index[-1] - series.index[0]).days
         if days <= 0: return {}
         
-        total_ret = wealth_index.iloc[-1] / wealth_index.iloc[0] - 1
-        cagr = (1 + total_ret) ** (365 / days) - 1
+        # 1. Period TWRR (Cumulative Return)
+        # This is what IBKR reports for periods < 1 Year.
+        # Example: Month 1 is +3%, Month 2 is -1%. Total is approx +1.97%.
+        period_twr = wealth_index.iloc[-1] / wealth_index.iloc[0] - 1
         
-        # 2. Volatility (Annualised)
-        # Scales standard deviation by sqrt(252) to approximate annual trading days.
+        # 2. Annualized Return (Internal Use Only)
+        # We need this to calculate the Sharpe Ratio correctly. 
+        # (Sharpe = Annualized Return / Annualized Volatility).
+        # We generally do NOT display this to the user for <1yr periods to avoid confusion.
+        ann_factor = 365 / days
+        annualized_ret = (1 + period_twr) ** ann_factor - 1
+        
+        # 3. Volatility (Always Annualized)
+        # Standard deviation * sqrt(252)
         vol = returns.std() * np.sqrt(252)
         
-        # 3. Sharpe Ratio (Annualised)
-        # Uses epsilon (1e-9) to prevent division by zero in zero-volatility cases.
-        excess_ret = cagr - self.rf
+        # 4. Sharpe Ratio
+        # Must compare apples to apples (Annualized Ret vs Annualized Vol)
+        excess_ret = annualized_ret - self.rf
         sharpe = excess_ret / vol if vol > 1e-9 else 0.0
         
-        # 4. Maximum Drawdown
-        # Computes rolling maximum to find minimum percentage deviation.
+        # 5. Maximum Drawdown
         roll_max = wealth_index.cummax()
         drawdown = (wealth_index - roll_max) / roll_max
         max_dd = drawdown.min()
         
         return {
-            'CAGR': cagr,
+            'Period_TWRR': period_twr,  # <--- The metric matching your PDF
             'Volatility': vol,
             'Sharpe': sharpe,
             'Max_DD': max_dd,
-            'Final_NAV': series.iloc[-1] # Raw NAV for display
+            'Final_NAV': series.iloc[-1]
         }
 
     def get_summary_table(self) -> tuple[pd.DataFrame, pd.DataFrame, object | None]:
         """
-        Aggregates performance metrics for Real, Control, and Simulated portfolios.
-
-        Calculates metrics individually for each simulation path before averaging to 
-        derive the "Expected Value" of the strategy under random asset selection.
-
-        Returns:
-            tuple: 
-                - summary_df (pd.DataFrame): Comparison table of averaged metrics.
-                - raw_sim_stats (pd.DataFrame): Raw metrics for every simulation path.
-                - styled_df (Styler | None): Formatted summary table (None if dependency missing).
+        Aggregates performance metrics using the new Period_TWRR label.
         """
         stats_real = self._calculate_metrics(self.real)
         stats_control = self._calculate_metrics(self.control)
         
-        # Computes metrics per path to preserve outcome distribution.
-        # Averaging NAVs prior to metric calculation underestimates volatility.
+        # Compute metrics per path
         sim_metrics = []
         for col in self.sims.columns:
             sim_metrics.append(self._calculate_metrics(self.sims[col]))
@@ -187,19 +167,19 @@ class PortfolioAnalyser:
         df_sim_stats = pd.DataFrame(sim_metrics)
         stats_sim_avg = df_sim_stats.mean().to_dict()
         
-        # Constructs Summary DataFrame
+        # Create Summary DataFrame
         df = pd.DataFrame([stats_real, stats_control, stats_sim_avg], 
                           index=['Real Portfolio', 'Control Portfolio', 'Simulated (Avg)'])
         
+        # Updated Format Map with clearer labels
         format_map: dict[str, Any] = {
-            'CAGR': '{:.2%}',
+            'Period_TWRR': '{:.2%}',    # Shows 5.00% instead of 21.5%
             'Volatility': '{:.2%}',
             'Sharpe': '{:.2f}',
             'Max_DD': '{:.2%}',
             'Final_NAV': '{:,.0f}'
         }
         
-        # Applies pandas styling if available
         try:
             df_styled = df.style.format(format_map)
         except (ImportError, AttributeError):
@@ -210,7 +190,6 @@ class PortfolioAnalyser:
     # ==========================================
     # VISUALISATION METHODS
     # ==========================================
-
     def plot_confidence_intervals(self, save_path: Optional[str] = None) -> None:
         """ 
         Generates plot comparing Real and Control portfolios against 
@@ -222,7 +201,9 @@ class PortfolioAnalyser:
         - Median Simulated Path
         """
         plt.figure(figsize=(12, 6))
-        
+
+        total_n = self.sims.shape[1]
+
         # Calculates Percentiles across simulation paths (axis=1)
         median = self.sims.median(axis=1)
         p95 = self.sims.quantile(0.95, axis=1)
@@ -238,6 +219,15 @@ class PortfolioAnalyser:
         plt.fill_between(self.sims.index, p05, p95, color='gray', alpha=0.15, label='90% Confidence Interval')
         plt.fill_between(self.sims.index, p25, p75, color='gray', alpha=0.30, label='50% Confidence Interval')
         plt.plot(median, color='gray', linestyle='--', alpha=0.6, label='Median Simulated Portfolio')
+
+        # Add Dynamic N label
+        plt.gca().text(0.98, 0.02, f'N = {total_n}', 
+                       transform=plt.gca().transAxes, 
+                       horizontalalignment='right', 
+                       verticalalignment='bottom', 
+                       fontsize=12,
+                       fontweight='normal',
+                       bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         # plt.title('Monte Carlo Analysis: Confidence Intervals')
         plt.ylabel('Net Asset Value [CHF]')
@@ -252,7 +242,6 @@ class PortfolioAnalyser:
 
         plt.show()
 
-
     def plot_simulation_traces(self, num_paths: int = 150, save_path: Optional[str] = None) -> None:
         """
         Visualizes a subset of individual simulation traces to illustrate path variance.
@@ -262,15 +251,26 @@ class PortfolioAnalyser:
                 Defaults to 150 to prevent overplotting.
         """
         plt.figure(figsize=(12, 6))
+
+        total_n = self.sims.shape[1]
         
         cols_to_plot = self.sims.columns[:min(len(self.sims.columns), num_paths)]
-        # 1. Plot actual simulation data (no label to avoid duplicate entries)
+        # Plot actual simulation data (no label to avoid duplicate entries)
         plt.plot(self.real, color='red', linewidth=2.5, label='Real Portfolio')
         plt.plot(self.control, color='blue', linewidth=2, label='Control Portfolio')
         plt.plot(self.sims[cols_to_plot], color='gray', linewidth=0.5, alpha=0.2)
 
-        # 2. Add a dummy line (empty data) just to create the single legend entry
+        # Add a dummy line (empty data) just to create the single legend entry
         plt.plot([], [], color='gray', linewidth=0.5, label='Simulated Portfolios')
+
+        # Add Dynamic N label
+        plt.gca().text(0.98, 0.02, f'N = {total_n}', 
+                       transform=plt.gca().transAxes, 
+                       horizontalalignment='right', 
+                       verticalalignment='bottom', 
+                       fontsize=12,
+                       fontweight='normal',
+                       bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         # plt.title(f'Monte Carlo Trace Analysis ({len(cols_to_plot)} paths)')
         plt.ylabel('Net Asset Value [CHF]')
@@ -285,7 +285,6 @@ class PortfolioAnalyser:
 
         plt.show()
 
-
     def plot_drawdown_profile(self, save_path: Optional[str] = None) -> None:
         """ 
         Plots historical drawdown profile over time.
@@ -294,8 +293,10 @@ class PortfolioAnalyser:
         against the median drawdown of simulated portfolios.
         """
         plt.figure(figsize=(12, 4))
-        
-        # Calculates drawdown from Wealth Index
+
+        total_n = self.sims.shape[1]
+
+        # Calculates drawdown from wealth index
         def _get_dd(s):
             _, wi = self._get_adjusted_returns_and_index(s)
             roll = wi.cummax()
@@ -315,6 +316,16 @@ class PortfolioAnalyser:
         plt.plot(dd_sim, color='gray', linestyle=':', linewidth=1.5, label='Median Simulated Portfolio')
         plt.fill_between(dd_sim.index, dd_sim, 0, color='gray', alpha=0.1)
 
+        # Add Dynamic N label
+        loc_config = {'x': 0.02, 'y': 0.02, 'ha': 'left', 'va': 'bottom'}
+        plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
+               transform=plt.gca().transAxes, 
+               horizontalalignment=loc_config['ha'], 
+               verticalalignment=loc_config['va'], 
+               fontsize=12,
+               fontweight='normal',
+               bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
+
         plt.ylabel('Drawdown [%]')
         plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0, symbol=''))
         plt.legend()
@@ -332,6 +343,7 @@ class PortfolioAnalyser:
         """Generates histogram for Final Net Asset Value (NAV)."""
         fig, ax = plt.subplots(figsize=(10, 6))
 
+        total_n = self.sims.shape[1]
         mean_val = sim_raw_stats['Final_NAV'].mean()
 
         # Reduced target_ticks to 5 to prevent label overlap on large currency values
@@ -339,6 +351,16 @@ class PortfolioAnalyser:
         
         sns.histplot(data=sim_raw_stats, x='Final_NAV', bins=bins, kde=True, ax=ax, color='skyblue')
         self._add_lines(ax, self.real.iloc[-1], self.control.iloc[-1], mean_val)
+
+        # Add Dynamic N label
+        loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
+        plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
+               transform=plt.gca().transAxes, 
+               horizontalalignment=loc_config['ha'], 
+               verticalalignment=loc_config['va'], 
+               fontsize=12,
+               fontweight='normal',
+               bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.set_xlabel("Net Asset Value [CHF]")
         ax.set_ylabel("Count")
@@ -356,7 +378,8 @@ class PortfolioAnalyser:
     def plot_distributions_maxdd(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
         """Generates histogram for Maximum Drawdown."""
         fig, ax = plt.subplots(figsize=(10, 6))
-        
+
+        total_n = self.sims.shape[1]
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
         mean_val = sim_raw_stats['Max_DD'].mean()
@@ -365,6 +388,16 @@ class PortfolioAnalyser:
         
         sns.histplot(data=sim_raw_stats, x='Max_DD', bins=bins, kde=True, ax=ax, color='salmon')
         self._add_lines(ax, real_stats['Max_DD'], control_stats['Max_DD'], mean_val)
+
+        # Add Dynamic N label
+        loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
+        plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
+               transform=plt.gca().transAxes, 
+               horizontalalignment=loc_config['ha'], 
+               verticalalignment=loc_config['va'], 
+               fontsize=12,
+               fontweight='normal',
+               bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.set_xlabel("Drawdown [%]")
         ax.set_ylabel("Count")
@@ -381,6 +414,7 @@ class PortfolioAnalyser:
         """Generates histogram for Volatility."""
         fig, ax = plt.subplots(figsize=(10, 6))
 
+        total_n = self.sims.shape[1]
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
         mean_val = sim_raw_stats['Volatility'].mean()
@@ -389,6 +423,16 @@ class PortfolioAnalyser:
         
         sns.histplot(data=sim_raw_stats, x='Volatility', bins=bins, kde=True, ax=ax, color='lightgreen')
         self._add_lines(ax, real_stats['Volatility'], control_stats['Volatility'], mean_val)
+
+        # Add Dynamic N label
+        loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
+        plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
+               transform=plt.gca().transAxes, 
+               horizontalalignment=loc_config['ha'], 
+               verticalalignment=loc_config['va'], 
+               fontsize=12,
+               fontweight='normal',
+               bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.set_xlabel("Annualised Volatility [%]")
         ax.set_ylabel("Count")
@@ -401,34 +445,49 @@ class PortfolioAnalyser:
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
         plt.show()
 
-    def plot_distributions_CAGR(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
-        """Generates histogram for CAGR."""
+    def plot_distributions_TWRR(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
+        """Generates histogram for Period TWRR (Cumulative Return)."""
         fig, ax = plt.subplots(figsize=(10, 6))
 
+        total_n = self.sims.shape[1]
+        
+        # Calculate single-point metrics for Real and Control to place the vertical lines
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
-        mean_val = sim_raw_stats['CAGR'].mean()
+        
+        mean_val = sim_raw_stats['Period_TWRR'].mean()
+        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Period_TWRR'])
+        
+        sns.histplot(data=sim_raw_stats, x='Period_TWRR', bins=bins, kde=True, ax=ax, color='orchid')
+        
+        self._add_lines(ax, real_stats['Period_TWRR'], control_stats['Period_TWRR'], mean_val)
 
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['CAGR'])
+        # Add Dynamic N label (Standard boilerplate)
+        loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
+        plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
+               transform=plt.gca().transAxes, 
+               horizontalalignment=loc_config['ha'], 
+               verticalalignment=loc_config['va'], 
+               fontsize=12,
+               fontweight='normal',
+               bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
-        sns.histplot(data=sim_raw_stats, x='CAGR', bins=bins, kde=True, ax=ax, color='orchid')
-        self._add_lines(ax, real_stats['CAGR'], control_stats['CAGR'], mean_val)
-        
-        ax.set_xlabel("Compound Annual Growth Rate [%]")
+        ax.set_xlabel("Cumulative Period Return [%]") 
         ax.set_ylabel("Count")
         ax.set_xticks(bins[::stride])
         ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=0, symbol=''))
 
         plt.tight_layout()
         if save_path:
-            print(f" [>] Saving CAGR plot to {save_path}")
+            print(f" [>] Saving TWRR plot to {save_path}")
             plt.savefig(save_path, dpi=600, bbox_inches='tight')
         plt.show()
     
     def plot_distributions_sharpe(self, sim_raw_stats: pd.DataFrame, save_path: Optional[str] = None) -> None:
         """Generates histogram for Sharpe Ratio."""
         fig, ax = plt.subplots(figsize=(10, 6))
-        
+
+        total_n = self.sims.shape[1]
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
         mean_val = sim_raw_stats['Sharpe'].mean()
@@ -437,6 +496,16 @@ class PortfolioAnalyser:
         
         sns.histplot(data=sim_raw_stats, x='Sharpe', bins=bins, kde=True, ax=ax, color='gold')
         self._add_lines(ax, real_stats['Sharpe'], control_stats['Sharpe'], mean_val)
+
+        # Add Dynamic N label
+        loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
+        plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
+               transform=plt.gca().transAxes, 
+               horizontalalignment=loc_config['ha'], 
+               verticalalignment=loc_config['va'], 
+               fontsize=12,
+               fontweight='normal',
+               bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.set_xlabel("Sharpe Ratio")
         ax.set_ylabel("Count")
