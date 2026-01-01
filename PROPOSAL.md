@@ -1,6 +1,6 @@
 # Monte Carlo Portfolio Reconstruction
 
-## Proposal
+## Original Project Proposal
 
 The proposed project aims to develop a flexible framework for reconstructing, simulating, and analysing investment portfolios using account data exported from Interactive Brokers (IBKR). The programme will be designed to handle any IBKR data imports, allowing users to upload their own CSV files and automatically generate a historic portfolio reconstruction. All main transactions, including trades, dividend payments, and margin interest payments, will be processed while maintaining currency separation until the final valuation in Swiss francs (CHF).
 

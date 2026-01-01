@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-This Python application reconstructs historical investment portfolios from Interactive Brokers (IBKR) activity statements and performs Monte Carlo simulations to assess performance attribution. By generating counterfactual portfolio histories based on the investor's specific set of tradeable assets, the application isolates skill from luck. 
+Standard performance metrics often fail to account for an investor's unique asset opportunity set and constraints, effectively obscuring the distinction between skill and luck. This project addresses this limitation by developing a generalised Python-based application that constructs an endogenous benchmark via bootstrap Monte Carlo simulation from standard Interactive Brokers (IBKR) "Activity Statements". For each of the N counterfactual portfolio timelines, the simulation randomises the asset selection for each trade event, while preserving trade timing and value. It handles various currencies, country-specific withholding and trading tax rates, dividends, stock splits, and IBKR's fee schedule and margin interest rates. 
 
 ---
 

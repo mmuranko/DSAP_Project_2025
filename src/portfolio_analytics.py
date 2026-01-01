@@ -404,29 +404,34 @@ class PortfolioAnalyser:
 
         total_n = self.sims.shape[1]
         mean_val = sim_raw_stats['Final NAV'].mean()
+        real_val = self.real.iloc[-1]
+        ctrl_val = self.control.iloc[-1]
 
-        # Reduced target_ticks to 5 to prevent label overlap on large currency values
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Final NAV'], target_ticks=5)
+        # 1. robust binning with anchors
+        bins, stride, tick_step = self._get_dynamic_bins_and_stride(
+            sim_raw_stats['Final NAV'], 
+            anchors=[real_val, ctrl_val], 
+            target_ticks=5
+        )
         
         sns.histplot(data=sim_raw_stats, x='Final NAV', bins=bins, kde=True, ax=ax, color='skyblue')
-        self._add_lines(ax, self.real.iloc[-1], self.control.iloc[-1], mean_val)
+        self._add_lines(ax, real_val, ctrl_val, mean_val)
 
-        # Add Dynamic N label
+        # 2. N label
         loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
         plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
                transform=plt.gca().transAxes, 
-               horizontalalignment=loc_config['ha'], 
-               verticalalignment=loc_config['va'], 
-               fontsize=12,
-               fontweight='normal',
+               horizontalalignment=loc_config['ha'], verticalalignment=loc_config['va'], 
+               fontsize=12, fontweight='normal',
                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.set_xlabel("Final Net Asset Value [CHF]")
         ax.set_ylabel("Count")
         
-        # Apply the calculated stride
+        # 3. Dynamic formatting (Currency)
         ax.set_xticks(bins[::stride])
-        ax.xaxis.set_major_formatter(mtick.StrMethodFormatter('{x:,.0f}'))
+        fmt = '{x:,.2f}' if tick_step < 1.0 else '{x:,.0f}'
+        ax.xaxis.set_major_formatter(mtick.StrMethodFormatter(fmt))
 
         plt.tight_layout()
         if save_path:
@@ -449,25 +454,30 @@ class PortfolioAnalyser:
         control_stats = self._calculate_metrics(self.control)
         mean_val = sim_raw_stats['Maximum Drawdown'].mean()
 
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Maximum Drawdown'])
+        # 1. robust binning with anchors
+        bins, stride, tick_step = self._get_dynamic_bins_and_stride(
+            sim_raw_stats['Maximum Drawdown'],
+            anchors=[real_stats['Maximum Drawdown'], control_stats['Maximum Drawdown']]
+        )
         
         sns.histplot(data=sim_raw_stats, x='Maximum Drawdown', bins=bins, kde=True, ax=ax, color='salmon')
         self._add_lines(ax, real_stats['Maximum Drawdown'], control_stats['Maximum Drawdown'], mean_val)
 
-        # Add Dynamic N label
+        # 2. N label
         loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
         plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
                transform=plt.gca().transAxes, 
-               horizontalalignment=loc_config['ha'], 
-               verticalalignment=loc_config['va'], 
-               fontsize=12,
-               fontweight='normal',
+               horizontalalignment=loc_config['ha'], verticalalignment=loc_config['va'], 
+               fontsize=12, fontweight='normal',
                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.set_xlabel("Drawdown [%]")
         ax.set_ylabel("Count")
+
+        # 3. Dynamic formatting (Percent)
         ax.set_xticks(bins[::stride])
-        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=0, symbol=''))
+        decimals = max(0, -int(np.floor(np.log10(tick_step * 100))))
+        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=decimals, symbol=''))
 
         plt.tight_layout()
         if save_path:
@@ -490,25 +500,30 @@ class PortfolioAnalyser:
         control_stats = self._calculate_metrics(self.control)
         mean_val = sim_raw_stats['Annualised Volatility'].mean()
 
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Annualised Volatility'])
+        # 1. robust binning with anchors
+        bins, stride, tick_step = self._get_dynamic_bins_and_stride(
+            sim_raw_stats['Annualised Volatility'],
+            anchors=[real_stats['Annualised Volatility'], control_stats['Annualised Volatility']]
+        )
         
         sns.histplot(data=sim_raw_stats, x='Annualised Volatility', bins=bins, kde=True, ax=ax, color='lightgreen')
         self._add_lines(ax, real_stats['Annualised Volatility'], control_stats['Annualised Volatility'], mean_val)
 
-        # Add Dynamic N label
+        # 2. N label
         loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
         plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
                transform=plt.gca().transAxes, 
-               horizontalalignment=loc_config['ha'], 
-               verticalalignment=loc_config['va'], 
-               fontsize=12,
-               fontweight='normal',
+               horizontalalignment=loc_config['ha'], verticalalignment=loc_config['va'], 
+               fontsize=12, fontweight='normal',
                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.set_xlabel("Annualised Volatility [%]")
         ax.set_ylabel("Count")
+
+        # 3. Dynamic formatting (Percent)
         ax.set_xticks(bins[::stride])
-        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=0, symbol=''))
+        decimals = max(0, -int(np.floor(np.log10(tick_step * 100))))
+        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=decimals, symbol=''))
 
         plt.tight_layout()
         if save_path:
@@ -527,32 +542,34 @@ class PortfolioAnalyser:
         fig, ax = plt.subplots(figsize=(10, 6))
 
         total_n = self.sims.shape[1]
-        
-        # Calculate single-point metrics for Real and Control to place the vertical lines
         real_stats = self._calculate_metrics(self.real)
         control_stats = self._calculate_metrics(self.control)
-        
         mean_val = sim_raw_stats['Period TWRR'].mean()
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Period TWRR'])
+        
+        # 1. robust binning with anchors
+        bins, stride, tick_step = self._get_dynamic_bins_and_stride(
+            sim_raw_stats['Period TWRR'],
+            anchors=[real_stats['Period TWRR'], control_stats['Period TWRR']]
+        )
         
         sns.histplot(data=sim_raw_stats, x='Period TWRR', bins=bins, kde=True, ax=ax, color='orchid')
-        
         self._add_lines(ax, real_stats['Period TWRR'], control_stats['Period TWRR'], mean_val)
 
-        # Add Dynamic N label (Standard boilerplate)
+        # 2. N label
         loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
         plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
                transform=plt.gca().transAxes, 
-               horizontalalignment=loc_config['ha'], 
-               verticalalignment=loc_config['va'], 
-               fontsize=12,
-               fontweight='normal',
+               horizontalalignment=loc_config['ha'], verticalalignment=loc_config['va'], 
+               fontsize=12, fontweight='normal',
                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.set_xlabel("Period TWRR [%]") 
         ax.set_ylabel("Count")
+
+        # 3. Dynamic formatting (Percent)
         ax.set_xticks(bins[::stride])
-        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=0, symbol=''))
+        decimals = max(0, -int(np.floor(np.log10(tick_step * 100))))
+        ax.xaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0, decimals=decimals, symbol=''))
 
         plt.tight_layout()
         if save_path:
@@ -575,25 +592,31 @@ class PortfolioAnalyser:
         control_stats = self._calculate_metrics(self.control)
         mean_val = sim_raw_stats['Geometric Sharpe Ratio'].mean()
 
-        bins, stride = self._get_dynamic_bins_and_stride(sim_raw_stats['Geometric Sharpe Ratio'])
+        # 1. robust binning with anchors
+        bins, stride, tick_step = self._get_dynamic_bins_and_stride(
+            sim_raw_stats['Geometric Sharpe Ratio'],
+            anchors=[real_stats['Geometric Sharpe Ratio'], control_stats['Geometric Sharpe Ratio']]
+        )
         
         sns.histplot(data=sim_raw_stats, x='Geometric Sharpe Ratio', bins=bins, kde=True, ax=ax, color='gold')
         self._add_lines(ax, real_stats['Geometric Sharpe Ratio'], control_stats['Geometric Sharpe Ratio'], mean_val)
 
-        # Add Dynamic N label
+        # 2. N label
         loc_config = {'x': 0.02, 'y': 0.98, 'ha': 'left', 'va': 'top'}
         plt.gca().text(loc_config['x'], loc_config['y'], f'N = {total_n}', 
                transform=plt.gca().transAxes, 
-               horizontalalignment=loc_config['ha'], 
-               verticalalignment=loc_config['va'], 
-               fontsize=12,
-               fontweight='normal',
+               horizontalalignment=loc_config['ha'], verticalalignment=loc_config['va'], 
+               fontsize=12, fontweight='normal',
                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.set_xlabel("Geometric Sharpe Ratio")
         ax.set_ylabel("Count")
+        
+        # 3. Dynamic formatting (Float)
         ax.set_xticks(bins[::stride])
-        ax.xaxis.set_major_formatter(mtick.FormatStrFormatter('%.2f'))
+        decimals = max(0, -int(np.floor(np.log10(tick_step))))
+        fmt = f'%.{decimals}f'
+        ax.xaxis.set_major_formatter(mtick.FormatStrFormatter(fmt))
 
         plt.tight_layout()
         if save_path:
@@ -616,28 +639,29 @@ class PortfolioAnalyser:
         ax.axvline(mean_val, color='black', linestyle=':', linewidth=2, label='Distribution Mean') 
         ax.legend(loc='upper right', framealpha=1.0, facecolor='white')
 
-    def _get_dynamic_bins_and_stride(self, data: pd.Series, target_bins: int = 40, target_ticks: int = 8) -> tuple[np.ndarray, int]:
+    def _get_dynamic_bins_and_stride(self, data: pd.Series, anchors: list[float] = None, target_bins: int = 40, target_ticks: int = 8) -> tuple[np.ndarray, int, float]:
         """
-        Calculates optimal histogram bin edges and tick stride.
-        Ensures ticks fall on integers or clean decimals (multiples of 1, 2, 5, 10).
-
-        Args:
-            data (pd.Series): The dataset to bin.
-            target_bins (int): Desired number of histogram bins.
-            target_ticks (int): Desired number of x-axis ticks.
-
-        Returns:
-            Tuple[np.ndarray, int]:
-                - Array of bin edges.
-                - Integer stride for tick labeling.
+        Calculates optimal histogram bin edges, tick stride, and tick step size.
+        Ensures the grid covers both the simulation distribution and any anchor values.
         """
-        val_range = data.max() - data.min()
+        # 1. Determine the full visual range including outliers
+        min_val, max_val = data.min(), data.max()
+        if anchors:
+            valid_anchors = [x for x in anchors if np.isfinite(x)]
+            if valid_anchors:
+                min_val = min(min_val, min(valid_anchors))
+                max_val = max(max_val, max(valid_anchors))
+
+        val_range = max_val - min_val
+        
+        # Handle zero-variance / singular distribution cases robustly
         if val_range <= 0: 
-            val_range = abs(data.mean()) * 0.1 if abs(data.mean()) > 1e-9 else 1.0
+            mean_val = abs(data.mean())
+            val_range = mean_val * 0.1 if mean_val > 1e-9 else 1.0
 
-        # 1. Determine "Nice" Tick Interval
+        # 2. Determine "Nice" Tick Interval based on the FULL range
         raw_tick_step = val_range / target_ticks
-        magnitude = 10 ** np.floor(np.log10(raw_tick_step))
+        magnitude = 10 ** np.floor(np.log10(raw_tick_step)) if raw_tick_step > 0 else 1.0
         residual = raw_tick_step / magnitude
         
         if residual <= 1.5: nice_mult = 1.0
@@ -647,20 +671,16 @@ class PortfolioAnalyser:
         
         tick_step = nice_mult * magnitude
         
-        # 2. Determine Stride (Bins per Tick) to match target_bins count
+        # 3. Determine Stride (Bins per Tick)
         approx_stride = tick_step / (val_range / target_bins)
         valid_strides = np.array([1, 2, 4, 5, 10, 20])
         stride = int(valid_strides[np.argmin(np.abs(valid_strides - approx_stride))])
         
-        # 3. Generate Bins aligned to the Tick Grid
+        # 4. Generate Bins aligned to the Tick Grid
         bin_step = tick_step / stride
-        lower_bound = np.floor(data.min() / tick_step) * tick_step
-        upper_bound = np.ceil(data.max() / tick_step) * tick_step
+        lower_bound = np.floor(min_val / tick_step) * tick_step
+        upper_bound = np.ceil(max_val / tick_step) * tick_step
         
         bins = np.arange(lower_bound, upper_bound + (bin_step * 0.5), bin_step)
         
-        # Ensure max value is covered
-        if bins[-1] < data.max():
-             bins = np.concatenate([bins, [bins[-1] + bin_step]])
-            
-        return bins, stride
+        return bins, stride, tick_step
