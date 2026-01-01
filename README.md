@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Standard performance metrics often fail to account for an investor's unique asset opportunity set and constraints, effectively obscuring the distinction between skill and luck. This project addresses this limitation by developing a generalised Python-based application that constructs an endogenous benchmark via bootstrap Monte Carlo simulation from standard Interactive Brokers (IBKR) "Activity Statements". For each of the N counterfactual portfolio timelines, the simulation randomises the asset selection for each trade event, while preserving trade timing and value. It handles various currencies, country-specific withholding and trading tax rates, dividends, stock splits, and IBKR's fee schedule and margin interest rates. 
+Standard performance metrics often fail to account for an investor's unique asset opportunity set and constraints, effectively obscuring the distinction between skill and luck. This project addresses this limitation by developing a generalised Python-based application that constructs an endogenous benchmark via bootstrap Monte Carlo simulation from standard *Interactive Brokers* (IBKR) "Activity Statements". For each of the $N$ counterfactual portfolio timelines, the simulation randomises the asset selection for each trade event, while preserving trade timing and value. It handles various currencies, country-specific withholding and trading tax rates, dividends, stock splits, and IBKR's fee schedule and margin interest rates. The application was validated on several IBKR portfolio reports; herein, a specific report is analysed ($N=100\ 000$) to highlight the application's functionalities.
 
 ---
 
@@ -16,8 +16,8 @@ Standard performance metrics often fail to account for an investor's unique asse
     pip install -r requirements.txt
     ```
 3.  **Provide Data**  
-    **Portfolio Report** On IBKR navigate to Performance & Reports > Statements > Activity Statement, select any time period, and press Download CSV. Place the CSV file it in the `data/` folder of this application.  
-    **Saved States:** If existing simulation checkpoints exist (`.pkl` or `.pkl.gz`), they must be placed in the `data/saved_states/` folder to be recognised by the loader.  
+    **Portfolio Report** On IBKR navigate to Performance & Reports > Statements > Activity Statement, select any time period, and press Download CSV. Place the CSV file it in the `data\` folder of this application.  
+    **Saved States:** If existing simulation checkpoints exist (`.pkl` or `.pkl.gz`), they must be placed in the `data\saved_states\` folder to be recognised by the loader.  
 
 ---
 
@@ -40,9 +40,9 @@ The application uses a state-machine architecture. Initially, the user can decid
 - `2. Fetch Market Data`: Downloads historical asset market prices (Yahoo Finance) and generates daily margin rates (IBKR/FRED) for all assets found in Step 1. 
 - `3. Run Control Reconstruction`: Rebuilds the *Real Portfolio* and generates the *Control Portfolio* (using the real trades but applying the simplified simulation logic). 
 - `4. Run Monte Carlo Simulation`: Generates $N$ counterfactual portfolio paths by randomly replacing the asset for each trade in the event log. 
-- `5. Analyse Results`: Calculates and plots risk and return metrics for the real and control portfolio and the simulated portfolios and saves them in `results/`. 
-- `6. Save State`: Saves the current state of the application to `data/saved_states/`. 
-- `7. Load State`: Loads a previous state from `data/saved_states/`. 
+- `5. Analyse Results`: Calculates and plots risk and return metrics for the real and control portfolio and the simulated portfolios and saves them in `results\`. 
+- `6. Save State`: Saves the current state of the application to `data\saved_states\`. 
+- `7. Load State`: Loads a previous state from `data\saved_states\`. 
 
 The user can exit the application from the main menu by typing `Q` and pressing Enter.  
 
@@ -96,7 +96,7 @@ DSAP_Project_2025/
 To verify the applications arithmetic logic and simulation mechanics, a short test module can be run:
 
 ```bash
-python -m unittest tests/test.py
+python -m unittest tests\test.py
 ```
 
 ---

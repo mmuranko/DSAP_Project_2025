@@ -1,21 +1,29 @@
-# AI Usage
+# Monte Carlo Portfolio Reconstruction
 
-## Overview 
-The conceptual architecture, financial logic, and research methodology underlying the Portfolio Reconstruction & Monte Carlo Engine were developed independently by the author. Artificial Intelligence tools (Google Gemini and OpenAI ChatGPT) were utilised strictly as technical auxiliaries to expedite specific implementation details, syntax validation, and code optimisation. The core stochastic framework and analytical conclusions presented herein remain the sole work of the author.
+---
 
-## Usage Summary
+## AI Usage
+
+### Overview
+
+The project's architecture, financial logic, and research methodology were developed independently. Artificial Intelligence tools (Google Gemini and OpenAI ChatGPT) were used to assist with specific coding tasks, such as helping to implement more advanced functions, debugging errors, and improving code structure.
+
+### Usage Summary
 
 AI tools were used for the following purposes:
 
-* **Implementation Assistance:** Used for specific logic within the `MonteCarloEngine` class and the CLI menu structure in `main.py`. Additionally, they generated regular expressions for the parsing strategy in `src\data_loader.py`.
-* **Optimisation:** Refactored iterative loops into vectorised operations within `src\data_processor.py`.
+* **Implementation Assistance:** Used for specific logic within the `MonteCarloEngine` class and the CLI menu structure in `main.py`. Additionally, they generated regular expressions for the parsing strategy in the `src\data_loader.py` module.
+* **Optimisation:** Helped with the implementation of vectorised operations, instead of iterative loops, within the `src\data_processor.py` module.
 * **Debugging:** Troubleshot errors and resolved library dependency conflicts.
-* **Documentation:** Drafted docstrings, comments, and type hints.
+* **Documentation:** Drafted industry standard docstrings, comments, and type hints.
 
-## Verification Statement
-I certify that I have reviewed and tested all code included in this project. I fully understand the logic and functionality of every module. The core concepts and analytical conclusions are entirely my own work.
+### Verification Statement
+
+I certify that I have reviewed and tested all code included in this project. I understand the logic and functionality of every module. The core concepts and analytical conclusions are entirely my own work.
+
+---
 
 **Author:** Marvin Muranko  
 **Student ID:** 21955182  
 **Course:** Advanced Programming 2025  
-**Date:** January 11, 2026  
+**Date:** January 11, 2026
