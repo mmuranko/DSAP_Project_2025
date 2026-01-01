@@ -1,23 +1,19 @@
-# AI Usage Summary
+# AI Usage
 
-## Overview
-This document outlines the usage of Artificial Intelligence tools (Google Gemini and ChatGPT) in the development of the **Portfolio Reconstruction & Monte Carlo Engine**.
-
-The conceptual framework, research questions, and financial logic are 100% my own work. The codebase is primarily my work, with AI serving as a technical assistant for specific implementation details, optimisation, and troubleshooting.
+## Overview 
+The conceptual architecture, financial logic, and research methodology underlying the Portfolio Reconstruction & Monte Carlo Engine were developed independently by the author. Artificial Intelligence tools (Google Gemini and OpenAI ChatGPT) were utilised strictly as technical auxiliaries to expedite specific implementation details, syntax validation, and code optimisation. The core stochastic framework and analytical conclusions presented herein remain the sole work of the author.
 
 ## Usage Summary
 
-* **Implementation Assistance:** AI assisted with the specific implementation details of the `MonteCarloEngine` class and the "Intelligent Dependency Chaining" logic within the `main.py` menu system. Furthermore, it assisted me with the intricate regex checks in `data_loader.py`.
-* **Optimisation:** I used AI to implement the vectorisation approach for `data_processor.py`.
-* **Debugging:** AI tools were used to troubleshoot runtime errors and resolve library conflicts.
-* **Documentation:** AI assisted in drafting docstrings, comments, and type hints.
+AI tools were used for the following purposes:
+
+* **Implementation Assistance:** Used for specific logic within the `MonteCarloEngine` class and the CLI menu structure in `main.py`. Additionally, they generated regular expressions for the parsing strategy in `src\data_loader.py`.
+* **Optimisation:** Refactored iterative loops into vectorised operations within `src\data_processor.py`.
+* **Debugging:** Troubleshot errors and resolved library dependency conflicts.
+* **Documentation:** Drafted docstrings, comments, and type hints.
 
 ## Verification Statement
-I certify that:
-
-1.  I have reviewed and tested all code included in this project.
-2.  I fully understand the logic and functionality of every module.
-3.  The core concepts and analytical conclusions are entirely my own work.
+I certify that I have reviewed and tested all code included in this project. I fully understand the logic and functionality of every module. The core concepts and analytical conclusions are entirely my own work.
 
 **Author:** Marvin Muranko  
 **Student ID:** 21955182  
